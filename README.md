@@ -21,8 +21,27 @@ This server enables AI agents to interact with your projects and tasks in a dete
 
 ## 🏗️ Installation & Setup
 
-### 1. Build the Server
-Clone the repository and build the project:
+### 1. Quick Start (NPM - Recommended)
+The fastest way to get started is via `npx`. This command will automatically configure your AI client:
+
+```bash
+npx -y fenkit-mcp setup <client>
+```
+*Supported clients: `claude`, `cursor`, `windsurf`, `codex`, `antigravity`, `claudecode`.*
+
+### 2. Manual Installation
+If you prefer a global installation for faster startup:
+
+```bash
+# Install globally
+npm install -g fenkit-mcp
+
+# Setup your client using the shorter 'fnk' alias
+fnk setup <client>
+```
+
+### 3. Build from Source
+If you are developing or prefer to build locally:
 
 ```bash
 cd 04-ickit-mcp
@@ -30,39 +49,21 @@ pnpm install
 pnpm run build
 ```
 
-### 2. Configure for AI Agents
-
-The fastest way is to use the `setup_client` MCP tool after connecting the server once:
-
-```
-setup_client(client: "claude")
-setup_client(client: "cursor", path: "/path/to/your/project")
-setup_client(client: "windsurf")
-setup_client(client: "codex")
-setup_client(client: "antigravity")
+Then use the `setup_client` MCP tool or the CLI:
+```bash
+node dist/index.js setup <client>
 ```
 
-To review config snippets without touching any files, use `get_setup_instructions(client: "claude")`.
+For more details on sharing with your team or publishing, see the [MCP Distribution Guide](docs/mcp_distribution_guide.md).
 
-#### Manual Configuration
-
-| Client | Config Path | Format |
-|--------|------------|--------|
-| **Claude Desktop** | `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) | JSON `mcpServers` |
-| **Cursor** | `.cursor/mcp.json` in project + `.cursor/rules/fenkit.mdc` | JSON + MDC |
-| **Windsurf** | `~/.windsurf/mcp.json` | JSON `mcpServers` |
-| **Codex** | `~/.codex/config.toml` | TOML `[mcp_servers.fenkit]` |
-| **Antigravity** | `~/.gemini/antigravity/mcp_config.json` | JSON `mcpServers` |
-
-All use `node /absolute/path/to/04-ickit-mcp/dist/index.js` as the command.
+---
 
 ## 🔑 Authentication
 
-Once the server is connected, use the `login` tool to save your API key:
-
+Once the server is connected, use the `login` tool to authenticate:
+ 
 ```bash
-# Obtain a token from Fenkit Web UI first
-login(token: "your-api-key")
+login()
 ```
 
 Verify your connection with:
@@ -70,11 +71,23 @@ Verify your connection with:
 get_status()
 ```
 
+## 🧠 Auto-Invoke Protocol
+
+Fenkit MCP is designed for **autonomous task coordination**. It includes a built-in protocol that teaches AI agents how to manage tasks without user intervention.
+
+Key lifecycle rules for agents:
+1.  **Context**: Always call `get_status` and `get_full_task` before starting work.
+2.  **Planning**: Automatically submit implementation plans via `update_task_plan`.
+3.  **Execution**: Update task status to `in_progress` via `update_task_metadata`.
+4.  **Completion**: Submit walkthroughs via `update_task_walkthrough` and mark as `done`.
+
+See the full [Fenkit Task Protocol](PROTOCOL.md) for details.
+
 ## 🧰 Available Tools
 
 | Tool | Description |
 |------|-------------|
-| `login` | Set your Fenkit API token and API URL. |
+| `login` | Authenticate via browser and save your API token automatically. |
 | `get_status` | Check authentication and active project status. |
 | `list_projects` | List all available Fenkit projects. |
 | `select_project` | Set the active project for subsequent task operations. |

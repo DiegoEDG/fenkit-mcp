@@ -1,41 +1,45 @@
 {
-  "name": "fenkit-mcp",
-  "version": "0.1.0",
-  "description": "Fenkit MCP Server — LLM-native task coordination layer",
-  "type": "module",
-  "main": "dist/index.js",
-  "bin": {
-    "fenkit-mcp": "dist/index.js"
-  },
-  "scripts": {
-    "build": "tsup",
-    "dev": "tsup --watch",
-    "start": "node dist/index.js",
-    "lint": "eslint src"
-  },
-  "keywords": [
-    "mcp",
-    "fenkit",
-    "llm",
-    "tasks"
-  ],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.7.1",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.28.0",
-    "axios": "^1.13.6",
-    "dotenv": "^16.5.0",
-    "open": "^11.0.0",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/node": "^25.5.0",
-    "eslint": "^10.1.0",
-    "globals": "^17.4.0",
-    "tsup": "^8.5.1",
-    "typescript": "^6.0.2",
-    "typescript-eslint": "^8.57.2"
-  }
+	"name": "fenkit-mcp",
+	"version": "0.1.0",
+	"description": "Fenkit MCP Server — LLM-native task coordination layer",
+	"type": "module",
+	"main": "dist/index.js",
+	"files": [
+		"dist"
+	],
+	"bin": {
+		"fenkit-mcp": "dist/index.js",
+		"fnk": "dist/index.js"
+	},
+	"scripts": {
+		"build": "tsup",
+		"dev": "tsup --watch",
+		"start": "node dist/index.js",
+		"lint": "eslint src"
+	},
+	"keywords": [
+		"mcp",
+		"fenkit",
+		"llm",
+		"tasks"
+	],
+	"author": "FENKIT APP",
+	"license": "ISC",
+	"packageManager": "pnpm@10.7.1",
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.28.0",
+		"axios": "^1.13.6",
+		"dotenv": "^16.5.0",
+		"open": "^11.0.0",
+		"zod": "^4.3.6"
+	},
+	"devDependencies": {
+		"@eslint/js": "^10.0.1",
+		"@types/node": "^25.5.0",
+		"eslint": "^10.1.0",
+		"globals": "^17.4.0",
+		"tsup": "^8.5.1",
+		"typescript": "^6.0.2",
+		"typescript-eslint": "^8.57.2"
+	}
 }
