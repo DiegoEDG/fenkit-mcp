@@ -16,8 +16,8 @@ This server enables AI agents to interact with your projects and tasks in a dete
 ## 🛠️ Prerequisites
 
 - **Node.js**: v18 or later
-- **PNPM**: Installed on your system
-- **Fenkit API Key**: Obtainable from the Fenkit Web UI (Settings → API Keys)
+- **NPM or PNPM**: Installed on your system
+- **Fenkit Account**: A registered account on the Fenkit platform.
 
 ## 🏗️ Installation & Setup
 
@@ -68,7 +68,11 @@ login()
 
 Verify your connection with:
 ```bash
-get_status()
+# Get full status
+fnk get_status
+
+# Or just the active project
+fnk get_active_project
 ```
 
 ## 🧠 Auto-Invoke Protocol
@@ -91,6 +95,7 @@ See the full [Fenkit Task Protocol](PROTOCOL.md) for details.
 | `get_status` | Check authentication and active project status. |
 | `list_projects` | List all available Fenkit projects. |
 | `select_project` | Set the active project for subsequent task operations. |
+| `get_active_project` | Get the currently active project name and ID. |
 | `list_tasks` | List tasks in the active project (supports status filters). |
 | `search_tasks` | Search tasks by name or description. |
 | `get_full_task` | Retrieve the complete context of a task in one call. |
@@ -100,26 +105,12 @@ See the full [Fenkit Task Protocol](PROTOCOL.md) for details.
 | `setup_client` | Automatically configure an AI client to use Fenkit MCP (writes config files). |
 | `get_setup_instructions` | Get manual config snippets for any client without touching files. |
 
-## 🧪 Testing Locally
+## 🛠️ Troubleshooting
 
-The easiest way to test the MCP server during development is using the **MCP Inspector**.
-
-### 1. Build the project
-```bash
-pnpm run build
-```
-
-### 2. Run the Inspector
-Execute the following command to start the inspector and connect it to your local server:
-
-```bash
-npx @modelcontextprotocol/inspector node dist/index.js
-```
-
-This will provide a web interface (usually at `http://localhost:5173`) where you can:
-- List available tools.
-- Execute tools with custom JSON arguments.
-- Inspect JSON-RPC traffic.
+- **Auth Timeout**: The `login` browser window must be completed within 2 minutes. If it times out, restart the process.
+- **Port Conflicts**: The login flow requires an available local port for the callback server. If you see port errors, ensure no other instance of the MCP server or CLI is running a login flow.
+- **Client Restart**: Most AI clients (Cursor, Claude Desktop) require a full restart to pick up changes in their MCP configuration files.
+- **Node Version**: If the server fails to start, verify you are using **Node.js v18** or later (`node -v`).
 
 ## 📐 Design Principles
 
@@ -127,12 +118,6 @@ This will provide a web interface (usually at `http://localhost:5173`) where you
 2. **Minimal Overhead**: Optimized tools to reduce LLM token usage (e.g., `get_full_task`).
 3. **Safe Writes**: All writes are versioned; no destructive overwrites are performed.
 4. **Privacy First**: Automatically redacts content wrapped in `<private>` tags.
-
-## 💻 Development
-
-- `pnpm run dev`: Build the server in watch mode.
-- `pnpm run build`: Production ESM build using `tsup`.
-- `pnpm run lint`: Run ESLint to check for stylistic and type issues.
 
 ---
 
