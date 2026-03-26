@@ -1,29 +1,41 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { loadConfig } from './config.js';
+import { isAllowedApiOrigin, validateServiceUrl } from './security.js';
 
 let client: AxiosInstance | null = null;
+
+export function createApiClient(options: { apiUrl: string; token: string }): AxiosInstance {
+  const validatedApi = validateServiceUrl(options.apiUrl, 'api');
+
+  const nextClient = axios.create({
+    baseURL: validatedApi.url,
+    headers: {
+      Authorization: `ApiKey ${options.token}`,
+      'Content-Type': 'application/json',
+    },
+    timeout: 15000,
+  });
+
+  nextClient.interceptors.request.use((requestConfig) => {
+    const baseUrl = requestConfig.baseURL ?? validatedApi.url;
+    const requestUrl = requestConfig.url ?? '/';
+    const absoluteUrl = new URL(requestUrl, baseUrl);
+
+    if (!isAllowedApiOrigin(absoluteUrl.origin)) {
+      throw new Error(`Blocked request to non-allowed API origin: ${absoluteUrl.origin}`);
+    }
+
+    return requestConfig;
+  });
+
+  return nextClient;
+}
 
 export function getApiClient(force = false): AxiosInstance {
   if (client && !force) return client;
 
   const config = loadConfig();
-
-  let { apiUrl } = config;
-  if (
-    (apiUrl.includes('localhost') || apiUrl.includes('127.0.0.1')) &&
-    !apiUrl.includes('/api/v1')
-  ) {
-    apiUrl = apiUrl.replace(/\/$/, '') + '/api/v1';
-  }
-
-  client = axios.create({
-    baseURL: apiUrl,
-    headers: {
-      Authorization: `ApiKey ${config.token}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: 15000,
-  });
+  client = createApiClient({ apiUrl: config.apiUrl, token: config.token });
 
   return client;
 }

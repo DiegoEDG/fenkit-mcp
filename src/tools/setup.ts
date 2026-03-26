@@ -17,15 +17,15 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 
 ### 2. Task Lifecycle
 - **Discovery**: Use \`list_tasks\` or \`search_tasks\` to find your assignment.
-- **Loading**: Use \`get_full_task(taskId)\` to retrieve full context (Plan, Walkthrough, Status) before starting.
-- **Planning**: Before coding, call \`update_task_plan(taskId, plan)\` with your technical approach.
-- **Execution**: Set status to \`in_progress\` using \`update_task_metadata(taskId, { status: "in_progress" })\`.
-- **Completion**: After verification, call \`update_task_walkthrough(taskId, walkthrough)\` and set status to \`done\` via \`update_task_metadata\`.
+- **Loading**: Start with \`get_task_context_compact(taskId)\`. Use \`get_task_context_full(taskId)\` or \`get_task_section(...)\` only when needed.
+- **Planning**: Before coding, call \`update_task_plan(taskId, plan, model, agent)\` with your technical approach.
+- **Execution**: Set status to \`in_progress\` using \`update_task_metadata(taskId, status, priority?, model, agent)\`.
+- **Completion**: After verification, call \`update_task_walkthrough(taskId, walkthrough, model, agent)\` and set status to \`done\` via \`update_task_metadata\`.
 
 ### 3. Compaction & Context Trimming
 - If the system notifies you of context trimming or compaction:
   - Immediately call \`update_task_walkthrough\` or \`update_task_plan\` to persist any unsaved progress.
-  - After trimming, re-orient using \`get_full_task(taskId)\`.
+  - After trimming, re-orient using \`get_task_context_compact(taskId)\`.
 
 ### 4. Automated Updates (Session End)
 - Do not wait for the user to ask you to record progress.
@@ -34,9 +34,24 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 
 // ─── Config Path Helpers ───────────────────────────────────────────────────────
 
-export type ClientType = 'claude' | 'cursor' | 'windsurf' | 'codex' | 'antigravity' | 'claudecode';
+export type ClientType =
+  | 'claude'
+  | 'cursor'
+  | 'windsurf'
+  | 'codex'
+  | 'opencode'
+  | 'antigravity'
+  | 'claudecode';
 
-export const CLIENTS: ClientType[] = ['claude', 'cursor', 'windsurf', 'codex', 'antigravity', 'claudecode'];
+export const CLIENTS: ClientType[] = [
+  'claude',
+  'cursor',
+  'windsurf',
+  'codex',
+  'opencode',
+  'antigravity',
+  'claudecode',
+];
 
 const isWindows = process.platform === 'win32';
 const homeDir = os.homedir();
@@ -76,6 +91,13 @@ function codexConfigPath(): string {
   return path.join(homeDir, '.codex', 'config.toml');
 }
 
+function opencodeConfigPath(): string {
+  if (isWindows) {
+    return path.join(appData, 'opencode', 'opencode.json');
+  }
+  return path.join(homeDir, '.config', 'opencode', 'opencode.json');
+}
+
 function claudeCodeConfigPath(): string {
   return path.join(homeDir, '.claude', 'config.json');
 }
@@ -94,6 +116,26 @@ function ensureDir(filePath: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
+}
+
+function resolveSafeProjectPath(projectPath?: string): string {
+  const basePath = projectPath ? path.resolve(projectPath) : process.cwd();
+  const workspaceRoot = path.resolve(process.cwd());
+  const allowArbitraryPath = process.env['FENKIT_ALLOW_ANY_SETUP_PATH'] === 'true';
+
+  if (allowArbitraryPath) {
+    return basePath;
+  }
+
+  const isWithinWorkspace =
+    basePath === workspaceRoot || basePath.startsWith(`${workspaceRoot}${path.sep}`);
+  if (!isWithinWorkspace) {
+    throw new Error(
+      `Unsafe path "${basePath}". setup_client.path must stay within ${workspaceRoot}. Set FENKIT_ALLOW_ANY_SETUP_PATH=true to override in trusted environments.`,
+    );
+  }
+
+  return basePath;
 }
 
 function readJsonOrDefault<T extends Record<string, unknown>>(filePath: string, defaultValue: T): T {
@@ -150,7 +192,7 @@ export function setupWindsurf(serverPath: string): { path: string; action: strin
 
 export function setupCursor(serverPath: string, projectPath?: string): { path: string; action: string } {
   // Project-level config
-  const basePath = projectPath ?? process.cwd();
+  const basePath = resolveSafeProjectPath(projectPath);
   const configPath = path.join(basePath, '.cursor', 'mcp.json');
   ensureDir(configPath);
 
@@ -228,6 +270,23 @@ export function setupCodex(serverPath: string): { path: string; action: string }
   return { path: configPath, action: `Updated ${configPath} and wrote ${instructionsPath}` };
 }
 
+export function setupOpenCode(serverPath: string): { path: string; action: string } {
+  const configPath = opencodeConfigPath();
+  ensureDir(configPath);
+
+  const config = readJsonOrDefault<Record<string, unknown>>(configPath, {});
+  const mcp = (config['mcp'] as Record<string, unknown>) ?? {};
+  mcp['fenkit'] = {
+    type: 'local',
+    enabled: true,
+    command: ['node', serverPath],
+  };
+  config['mcp'] = mcp;
+
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  return { path: configPath, action: 'Updated opencode.json (mcp.fenkit)' };
+}
+
 export function setupClaudeCode(serverPath: string): { path: string; action: string } {
   const configPath = claudeCodeConfigPath();
   ensureDir(configPath);
@@ -258,22 +317,36 @@ export const setupHandlers: Record<ClientType, (serverPath: string, projectPath?
   cursor: setupCursor,
   antigravity: setupAntigravity,
   codex: setupCodex,
+  opencode: setupOpenCode,
   claudecode: setupClaudeCode,
 };
 
 /**
  * Setup tools — automate client MCP configuration.
- * Supports: Claude Desktop, Cursor, Windsurf, Codex, Antigravity.
+ * Supports: Claude Desktop, Cursor, Windsurf, Codex, OpenCode, Antigravity, Claude Code.
  */
 export function registerSetupTools(server: McpServer): void {
+  const clientDisplayName = (client: ClientType): string => {
+    const labels: Record<ClientType, string> = {
+      claude: 'Claude Desktop',
+      cursor: 'Cursor',
+      windsurf: 'Windsurf',
+      codex: 'Codex',
+      opencode: 'OpenCode',
+      antigravity: 'Antigravity',
+      claudecode: 'Claude Code',
+    };
+    return labels[client];
+  };
+
   server.tool(
     'setup_client',
-    'Configure a supported AI client (Claude Desktop, Cursor, Windsurf, Codex, or Antigravity) to use the Fenkit MCP server. This writes the appropriate config files so you never have to do it manually.',
+    'Configure a supported AI client (Claude Desktop, Cursor, Windsurf, Codex, OpenCode, Antigravity, or Claude Code) to use the Fenkit MCP server. This writes the appropriate config files so you never have to do it manually.',
     {
       client: z
-        .enum(['claude', 'cursor', 'windsurf', 'codex', 'antigravity', 'claudecode'])
+        .enum(['claude', 'cursor', 'windsurf', 'codex', 'opencode', 'antigravity', 'claudecode'])
         .describe(
-          'The AI client to configure. Options: claude (Claude Desktop), cursor (Cursor IDE), windsurf (Windsurf IDE), codex (OpenAI Codex CLI), antigravity (Google Antigravity IDE), claudecode (Claude Code CLI).',
+          'The AI client to configure. Options: claude (Claude Desktop), cursor (Cursor IDE), windsurf (Windsurf IDE), codex (OpenAI Codex CLI), opencode (OpenCode CLI), antigravity (Google Antigravity IDE), claudecode (Claude Code CLI).',
         ),
       path: z
         .string()
@@ -295,9 +368,9 @@ export function registerSetupTools(server: McpServer): void {
           `**Server**: \`node ${serverPath}\``,
           ``,
           `**Next steps**:`,
-          `1. Restart ${client === 'claude' ? 'Claude Desktop' : client === 'cursor' ? 'Cursor' : client === 'windsurf' ? 'Windsurf' : client === 'codex' ? 'Codex' : 'Antigravity'} to load the new config.`,
+          `1. Restart ${clientDisplayName(client)} to load the new config.`,
           `2. Run \`get_status\` to verify authentication.`,
-          `3. Use \`login_browser\` with your Fenkit API key if not yet authenticated.`,
+          `3. Use \`login\` to authenticate if not yet authenticated.`,
         ];
 
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
@@ -317,7 +390,7 @@ export function registerSetupTools(server: McpServer): void {
     'Get manual setup instructions for any supported AI client. Returns the exact JSON/TOML config blocks to copy-paste, without modifying any files. Useful when you want to review before applying.',
     {
       client: z
-        .enum(['claude', 'cursor', 'windsurf', 'codex', 'antigravity', 'claudecode'])
+        .enum(['claude', 'cursor', 'windsurf', 'codex', 'opencode', 'antigravity', 'claudecode'])
         .describe('The AI client you want instructions for.'),
     },
     async ({ client }) => {
@@ -401,6 +474,22 @@ export function registerSetupTools(server: McpServer): void {
           `Also create \`${codexInstructionsPath()}\` with the Fenkit protocol:`,
           '```markdown',
           FENKIT_MEMORY_PROTOCOL,
+          '```',
+        ].join('\n'),
+
+        opencode: [
+          `**OpenCode** — Edit \`${opencodeConfigPath()}\`:`,
+          '```json',
+          '{',
+          '  "$schema": "https://opencode.ai/config.json",',
+          '  "mcp": {',
+          '    "fenkit": {',
+          '      "type": "local",',
+          '      "enabled": true,',
+          '      "command": ["node", "' + serverPath + '"]',
+          '    }',
+          '  }',
+          '}',
           '```',
         ].join('\n'),
         claudecode: [

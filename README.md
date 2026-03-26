@@ -1,124 +1,98 @@
-# Fenkit MCP Server
+# 🚀 Fenkit MCP - La Infraestructura del "Done"
 
-The **Fenkit MCP Server** is a Model Context Protocol (MCP) implementation designed to bridge LLM agents (like Claude, Cursor, and Windsurf) with the Fenkit task management system. It provides a structured, LLM-native interface for task coordination, discovery, and lifecycle management.
+### **Cero fricción. Máximo control. Sincronización absoluta entre tu Agente AI y tu flujo de trabajo.**
 
-## 🚀 Overview
+[![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK-orange?style=for-the-badge)](https://modelcontextprotocol.io)
+[![Node.js](https://img.shields.io/badge/Node.js-v18+-green?style=for-the-badge)](https://nodejs.org)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=for-the-badge)](https://www.npmjs.com/package/fenkit-mcp)
+[![License](https://img.shields.io/badge/license-MIT-purple?style=for-the-badge)](LICENSE)
 
-This server enables AI agents to interact with your projects and tasks in a deterministic way, ensuring that implementation plans and walkthroughs follow structured schemas for better visibility and record-keeping in the Fenkit Web UI.
+Fenkit MCP conecta tus agentes AI con **Fenkit**, tu centro de comando. Transforma SDD en progreso real y documentación estructurada sin mover un solo dedo.
 
-### Key Capabilities:
-- **Project Discovery**: List and select active projects.
-- **Task Search**: Find tasks by title, description, or status.
-- **Context Retrieval**: Fetch full task context (description, history, plans) in a single optimized markdown blob.
-- **Structured Writes**: Submit versioned implementation plans and completion walkthroughs.
-- **Metadata Tracking**: Automatically captures execution signals (duration, model, token usage).
+---
 
-## 🛠️ Prerequisites
+## 🌪️ El Loop del Éxito: Auto-Invoke
 
-- **Node.js**: v18 or later
-- **NPM or PNPM**: Installed on your system
-- **Fenkit Account**: A registered account on the Fenkit platform.
+Olvida el copiar y pegar. Fenkit MCP implementa un ciclo de vida autónomo donde el agente no solo "hace", sino que **reporta y documenta**.
 
-## 🏗️ Installation & Setup
+```mermaid
+sequenceDiagram
+    participant U as Usuario
+    participant A as Agente AI
+    participant M as Fenkit MCP
+    participant B as Fenkit Backend
 
-### 1. Quick Start (NPM - Recommended)
-The fastest way to get started is via `npx`. This command will automatically configure your AI client:
+    U->>A: "Trabaja en la tarea #42"
+    A->>M: list_tasks()
+    M->>A: Contexto completo de la tarea
+    Note over A: El agente piensa y ejecuta (Con tu aprobación)
+    A->>M: update_task_walkthrough()
+    A->>M: set_task_status("Done")
+    M->>B: Sync en tiempo real
+    B->>U: Notificación: Tarea Finalizada ✅
+```
+
+---
+
+## ⚡ Activación en 30 Segundos
+
+Despliega el poder de Fenkit en tu cliente favorito con un solo comando:
 
 ```bash
 npx -y fenkit-mcp setup <client>
 ```
-*Supported clients: `claude`, `cursor`, `windsurf`, `codex`, `antigravity`, `claudecode`.*
 
-### 2. Manual Installation
-If you prefer a global installation for faster startup:
-
-```bash
-# Install globally
-npm install -g fenkit-mcp
-
-# Setup your client using the shorter 'fnk' alias
-fnk setup <client>
-```
-
-### 3. Build from Source
-If you are developing or prefer to build locally:
-
-```bash
-cd 04-ickit-mcp
-pnpm install
-pnpm run build
-```
-
-Then use the `setup_client` MCP tool or the CLI:
-```bash
-node dist/index.js setup <client>
-```
-
-For more details on sharing with your team or publishing, see the [MCP Distribution Guide](docs/mcp_distribution_guide.md).
+| Cliente | Comando de Setup |
+| :--- | :--- |
+| **Claude Desktop** | `npx -y fenkit-mcp setup claude` |
+| **Cursor** | `npx -y fenkit-mcp setup cursor` |
+| **Windsurf** | `npx -y fenkit-mcp setup windsurf` |
+| **Claude Code** | `npx -y fenkit-mcp setup claudecode` |
+| **Antigravity** | `npx -y fenkit-mcp setup antigravity` |
+| **OpenCode** | `npx -y fenkit-mcp setup opencode` |
 
 ---
 
-## 🔑 Authentication
+## ⚖️ ¿Por qué Fenkit MCP?
 
-Once the server is connected, use the `login` tool to authenticate:
- 
-```bash
-login()
-```
-
-Verify your connection with:
-```bash
-# Get full status
-fnk get_status
-
-# Or just the active project
-fnk get_active_project
-```
-
-## 🧠 Auto-Invoke Protocol
-
-Fenkit MCP is designed for **autonomous task coordination**. It includes a built-in protocol that teaches AI agents how to manage tasks without user intervention.
-
-Key lifecycle rules for agents:
-1.  **Context**: Always call `get_status` and `get_full_task` before starting work.
-2.  **Planning**: Automatically submit implementation plans via `update_task_plan`.
-3.  **Execution**: Update task status to `in_progress` via `update_task_metadata`.
-4.  **Completion**: Submit walkthroughs via `update_task_walkthrough` and mark as `done`.
-
-See the full [Fenkit Task Protocol](PROTOCOL.md) for details.
-
-## 🧰 Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `login` | Authenticate via browser and save your API token automatically. |
-| `get_status` | Check authentication and active project status. |
-| `list_projects` | List all available Fenkit projects. |
-| `select_project` | Set the active project for subsequent task operations. |
-| `get_active_project` | Get the currently active project name and ID. |
-| `list_tasks` | List tasks in the active project (supports status filters). |
-| `search_tasks` | Search tasks by name or description. |
-| `get_full_task` | Retrieve the complete context of a task in one call. |
-| `update_task_plan` | Propose or update an implementation plan for a task. |
-| `update_task_walkthrough` | Submit a walkthrough of completed work. |
-| `update_task_metadata` | Update task status, priority, or custom metadata. |
-| `setup_client` | Automatically configure an AI client to use Fenkit MCP (writes config files). |
-| `get_setup_instructions` | Get manual config snippets for any client without touching files. |
-
-## 🛠️ Troubleshooting
-
-- **Auth Timeout**: The `login` browser window must be completed within 2 minutes. If it times out, restart the process.
-- **Port Conflicts**: The login flow requires an available local port for the callback server. If you see port errors, ensure no other instance of the MCP server or CLI is running a login flow.
-- **Client Restart**: Most AI clients (Cursor, Claude Desktop) require a full restart to pick up changes in their MCP configuration files.
-- **Node Version**: If the server fails to start, verify you are using **Node.js v18** or later (`node -v`).
-
-## 📐 Design Principles
-
-1. **Task-Centric**: Tasks are the primary unit of coordination.
-2. **Minimal Overhead**: Optimized tools to reduce LLM token usage (e.g., `get_full_task`).
-3. **Safe Writes**: All writes are versioned; no destructive overwrites are performed.
-4. **Privacy First**: Automatically redacts content wrapped in `<private>` tags.
+| Característica | Prompting Manual | Con Fenkit MCP |
+| :--- | :--- | :--- |
+| **Contexto** | Fragmentado | Siempre sincrónico |
+| **Documentación** | "Luego lo escribo" (Nunca pasa) | Automática: Plan + Walkthrough |
+| **Visibilidad** | Caja negra | Métricas y progreso en vivo |
+| **Esfuerzo** | Alto (Copy-Paste infinito) | **Cero** (Auto-invoke) |
 
 ---
 
-*Part of the Fenkit AI-Native Creator App Platform.*
+## 📦 El Valor del "Dev-in-the-loop"
+
+Fenkit permite que el desarrollador se enfoque en lo que realmente aporta valor: el **Spec Driven Development (SDD), Testing, Seguridad, etc**. Deja que el agente construya mientras Fenkit gestiona la burocracia técnica.
+
+Al eliminar el caos administrativo, Fenkit genera de forma autónoma:
+
+- **📈 Métricas de ejecución:** Seguimiento en tiempo real de versiones y tiempos de ejecución.
+- **🛡️ Evidencia:** Documentación centralizada y lista para auditorías o revisiones de equipo.
+- **🔁 Sincronización Total:** Tu código y tu panel de control siempre en la misma página, sin copy-paste.
+
+---
+
+## 🧰 Herramientas
+
+Nuestras herramientas están diseñadas para que el agente tenga autonomía total:
+
+- 🔐 **Auth:** `login`, `get_status` - Seguridad robusta en cada interacción.
+- 📂 **Proyectos:** `list_projects`, `select_project` - Navegación inteligente.
+- 📝 **Tareas:** `list_tasks`, `get_task_context_compact` - Foco en lo que importa.
+- 🚀 **Escritura:** `update_task_plan`, `update_task_walkthrough` - Documentación como subproducto.
+
+---
+
+## 🔥 Empieza Ahora
+
+No dejes que tu agente trabaje en el vacío. Haz que cada línea de código cuente.
+
+```bash
+npx -y fenkit-mcp setup cursor
+```
+
+**Haz que tu agente construya. Deja que Fenkit lo demuestre.**

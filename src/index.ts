@@ -8,7 +8,7 @@ import { registerSetupTools, setupHandlers, CLIENTS, ClientType } from './tools/
 
 const server = new McpServer({
 	name: 'fenkit-mcp',
-	version: '0.1.0',
+	version: '1.0.0',
 	description:
 		'Fenkit MCP Server — LLM-native task coordination layer for AI agents. Discover, plan, execute, and track tasks in the Fenkit platform.'
 });
@@ -25,7 +25,7 @@ registerTaskReadTools(server);
 // Phase 2: Task Writes (Plan, Walkthrough, Metadata)
 registerTaskWriteTools(server);
 
-// Setup: Client Configuration (Claude, Cursor, Windsurf, Codex, Antigravity)
+// Setup: Client Configuration (Claude, Cursor, Windsurf, Codex, OpenCode, Antigravity, Claude Code)
 registerSetupTools(server);
 
 // Start the server with stdio transport

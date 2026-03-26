@@ -19,7 +19,14 @@ const DEFAULT_CONFIG: FnkConfig = {
 
 function ensureConfigDir(): void {
   if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  }
+  if (process.platform !== 'win32') {
+    try {
+      fs.chmodSync(CONFIG_DIR, 0o700);
+    } catch {
+      // best effort only
+    }
   }
 }
 
@@ -41,6 +48,13 @@ export function saveConfig(config: Partial<FnkConfig>): void {
   const merged = { ...current, ...config };
 
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
+  if (process.platform !== 'win32') {
+    try {
+      fs.chmodSync(CONFIG_FILE, 0o600);
+    } catch {
+      // best effort only
+    }
+  }
 }
 
 export function requireAuth(): FnkConfig {

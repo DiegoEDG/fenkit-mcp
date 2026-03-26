@@ -1,15 +1,26 @@
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import open from 'open';
 import { loadConfig, saveConfig } from '../config.js';
-import { getApiClient } from '../api.js';
+import { createApiClient } from '../api.js';
+import { getDefaultApiUrl, getDefaultAppUrl, validateServiceUrl } from '../security.js';
 
 interface ProjectResponse {
 	id: string;
 	name: string;
 	description?: string;
 }
+
+const CallbackPayloadSchema = z
+	.object({
+		token: z.string().min(1),
+		state: z.string().min(1)
+	})
+	.strict();
+
+const MAX_CALLBACK_BODY_BYTES = 16 * 1024;
 
 /**
  * Finds an available port by letting the OS pick one.
@@ -34,32 +45,92 @@ function getAvailablePort(): Promise<number> {
  * Starts a temporary local HTTP server that waits for a token callback
  * from the frontend auth page.
  */
-function waitForToken(port: number): Promise<string> {
+function waitForToken(port: number, expectedState: string, allowedOrigin: string): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const server = http.createServer((req, res) => {
-			// Enable CORS for the frontend origin
-			res.setHeader('Access-Control-Allow-Origin', '*');
+		const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
+		let settled = false;
+		const finalize = (fn: () => void): void => {
+			if (settled) return;
+			settled = true;
+			if (timeoutRef.current) clearTimeout(timeoutRef.current);
+			fn();
+		};
+		const isAllowedOrigin = (origin: string | undefined): boolean => origin === allowedOrigin;
+		const setCorsHeaders = (res: http.ServerResponse): void => {
+			res.setHeader('Vary', 'Origin');
+			res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
 			res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
 			res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+		};
+
+		const server = http.createServer((req, res) => {
+			const requestOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
 
 			if (req.method === 'OPTIONS') {
+				if (!isAllowedOrigin(requestOrigin)) {
+					res.writeHead(403, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Origin not allowed' }));
+					return;
+				}
+				setCorsHeaders(res);
 				res.writeHead(204);
 				res.end();
 				return;
 			}
 
 			if (req.method === 'POST' && req.url === '/callback') {
+				if (!isAllowedOrigin(requestOrigin)) {
+					res.writeHead(403, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Origin not allowed' }));
+					return;
+				}
+				setCorsHeaders(res);
+
+				const contentType = req.headers['content-type'];
+				if (!contentType?.includes('application/json')) {
+					res.writeHead(415, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Content-Type must be application/json' }));
+					return;
+				}
+				const contentLengthHeader = req.headers['content-length'];
+				if (contentLengthHeader) {
+					const contentLength = Number.parseInt(contentLengthHeader, 10);
+					if (!Number.isNaN(contentLength) && contentLength > MAX_CALLBACK_BODY_BYTES) {
+						res.writeHead(413, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify({ error: 'Request body too large' }));
+						return;
+					}
+				}
+
 				let body = '';
+				let bodySize = 0;
+				let rejectedForSize = false;
 				req.on('data', (chunk: Buffer) => {
+					bodySize += chunk.length;
+					if (bodySize > MAX_CALLBACK_BODY_BYTES) {
+						rejectedForSize = true;
+						res.writeHead(413, { 'Content-Type': 'application/json' });
+						res.end(JSON.stringify({ error: 'Request body too large' }));
+						req.destroy();
+						return;
+					}
 					body += chunk.toString();
 				});
 				req.on('end', () => {
+					if (rejectedForSize) return;
 					try {
-						const { token } = JSON.parse(body) as { token: string };
+						const parsed = CallbackPayloadSchema.parse(JSON.parse(body));
+						if (parsed.state !== expectedState) {
+							res.writeHead(401, { 'Content-Type': 'application/json' });
+							res.end(JSON.stringify({ error: 'Invalid auth state' }));
+							return;
+						}
 						res.writeHead(200, { 'Content-Type': 'application/json' });
 						res.end(JSON.stringify({ ok: true }));
-						server.close();
-						resolve(token);
+						finalize(() => {
+							server.close();
+							resolve(parsed.token);
+						});
 					} catch {
 						res.writeHead(400, { 'Content-Type': 'application/json' });
 						res.end(JSON.stringify({ error: 'Invalid payload' }));
@@ -75,13 +146,15 @@ function waitForToken(port: number): Promise<string> {
 		server.listen(port, '127.0.0.1');
 
 		server.on('error', (err) => {
-			reject(err);
+			finalize(() => reject(err));
 		});
 
 		// Timeout after 2 minutes
-		setTimeout(() => {
-			server.close();
-			reject(new Error('Authentication timed out after 2 minutes.'));
+		timeoutRef.current = setTimeout(() => {
+			finalize(() => {
+				server.close();
+				reject(new Error('Authentication timed out after 2 minutes.'));
+			});
 		}, 120_000);
 	});
 }
@@ -93,11 +166,22 @@ function waitForToken(port: number): Promise<string> {
 export function registerAuthTools(server: McpServer): void {
 	// login — Shared handler for browser-based auth
 	const loginHandler = async ({ appUrl, apiUrl }: { appUrl?: string; apiUrl?: string }) => {
-		const resolvedAppUrl = appUrl ?? 'https://ickit-fe.vercel.app';
-		const resolvedApiUrl = apiUrl ?? 'https://ickit-be.vercel.app/api/v1';
+		const resolvedAppUrl = appUrl ?? getDefaultAppUrl();
+		const resolvedApiUrl = apiUrl ?? getDefaultApiUrl();
+		let validatedAppUrl: ReturnType<typeof validateServiceUrl>;
+		let validatedApiUrl: ReturnType<typeof validateServiceUrl>;
+		try {
+			validatedAppUrl = validateServiceUrl(resolvedAppUrl, 'app');
+			validatedApiUrl = validateServiceUrl(resolvedApiUrl, 'api');
+		} catch (error) {
+			const message = error instanceof Error ? error.message : 'Invalid URL';
+			return {
+				content: [{ type: 'text' as const, text: `❌ ${message}` }],
+				isError: true
+			};
+		}
 
-		// Save API URL first so subsequent calls use it
-		saveConfig({ apiUrl: resolvedApiUrl });
+		const authState = randomBytes(16).toString('hex');
 
 		let port: number;
 		try {
@@ -113,10 +197,10 @@ export function registerAuthTools(server: McpServer): void {
 			};
 		}
 
-		const authUrl = `${resolvedAppUrl}/tool-auth?port=${port}&tool=mcp`;
+		const authUrl = `${validatedAppUrl.url}/tool-auth?port=${port}&tool=mcp&state=${authState}`;
 
 		// Start the token receiver before opening the browser
-		const tokenPromise = waitForToken(port);
+		const tokenPromise = waitForToken(port, authState, validatedAppUrl.origin);
 
 		try {
 			await open(authUrl);
@@ -146,25 +230,38 @@ export function registerAuthTools(server: McpServer): void {
 			};
 		}
 
-		saveConfig({ token });
-
+		let projects: ProjectResponse[];
 		let autoSelectedProjectName: string | undefined;
 		try {
-			const api = getApiClient(true);
+			const api = createApiClient({ apiUrl: validatedApiUrl.url, token });
 			const { data } = await api.get<ProjectResponse[]>('/projects');
-
-			if (data.length === 1) {
-				const project = data[0];
-				saveConfig({
-					currentProjectId: project.id,
-					currentProjectName: project.name
-				});
-				autoSelectedProjectName = project.name;
-			}
+			projects = data;
 		} catch (error) {
-			// We don't want to fail the whole login if project fetching fails
-			console.error('Failed to fetch projects for auto-selection:', error);
+			const message = error instanceof Error ? error.message : 'Unknown validation error';
+			return {
+				content: [
+					{
+						type: 'text' as const,
+						text: `❌ Authentication failed: token validation against API failed (${message}).`
+					}
+				],
+				isError: true
+			};
 		}
+
+		const configUpdate: Parameters<typeof saveConfig>[0] = {
+			token,
+			apiUrl: validatedApiUrl.url
+		};
+
+		if (projects.length === 1) {
+			const project = projects[0];
+			configUpdate.currentProjectId = project.id;
+			configUpdate.currentProjectName = project.name;
+			autoSelectedProjectName = project.name;
+		}
+
+		saveConfig(configUpdate);
 
 		let successMessage = '✅ Authenticated successfully! Token saved to ~/.fnk/config.json.';
 		if (autoSelectedProjectName) {
@@ -204,10 +301,10 @@ export function registerAuthTools(server: McpServer): void {
 			const authenticated = !!config.token;
 			const hasProject = !!config.currentProjectId;
 
-			const lines = [
-				`**Authenticated**: ${authenticated ? '✅ Yes' : "❌ No — run 'login_browser' first"}`,
-				`**API URL**: ${config.apiUrl}`
-			];
+				const lines = [
+					`**Authenticated**: ${authenticated ? '✅ Yes' : "❌ No — run 'login' first"}`,
+					`**API URL**: ${config.apiUrl}`
+				];
 
 			if (hasProject) {
 				lines.push(`**Active Project**: ${config.currentProjectName || config.currentProjectId}`);
