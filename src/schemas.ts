@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+export const ArtifactModeSchema = z
+  .enum(['mini', 'full'])
+  .describe('Artifact detail level. Use "full" when the agent already produced a complete artifact (e.g. plan mode).');
+export type ArtifactMode = z.infer<typeof ArtifactModeSchema>;
+
 // --- PRD 4.2: Plan Schema ---
 export const PlanSchema = z.object({
   summary: z.string().describe('Brief summary of the implementation plan'),

@@ -4,7 +4,7 @@
 
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK-orange?style=for-the-badge)](https://modelcontextprotocol.io)
 [![Node.js](https://img.shields.io/badge/Node.js-v18+-green?style=for-the-badge)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=for-the-badge)](https://www.npmjs.com/package/fenkit-mcp)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue?style=for-the-badge)](https://www.npmjs.com/package/fenkit-mcp)
 [![License](https://img.shields.io/badge/license-MIT-purple?style=for-the-badge)](LICENSE)
 
 Fenkit MCP conecta tus agentes AI con **Fenkit**, tu centro de comando. Transforma SDD en progreso real y documentación estructurada sin mover un solo dedo.
@@ -44,12 +44,13 @@ npx -y fenkit-mcp setup <client>
 
 | Cliente | Comando de Setup |
 | :--- | :--- |
+| **OpenCode** | `npx -y fenkit-mcp setup opencode` |
+| **Claude Code** | `npx -y fenkit-mcp setup claudecode` |
 | **Claude Desktop** | `npx -y fenkit-mcp setup claude` |
+| **GPT Codex** | `npx -y fenkit-mcp setup codex` |
 | **Cursor** | `npx -y fenkit-mcp setup cursor` |
 | **Windsurf** | `npx -y fenkit-mcp setup windsurf` |
-| **Claude Code** | `npx -y fenkit-mcp setup claudecode` |
 | **Antigravity** | `npx -y fenkit-mcp setup antigravity` |
-| **OpenCode** | `npx -y fenkit-mcp setup opencode` |
 
 ---
 

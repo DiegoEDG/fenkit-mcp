@@ -18,9 +18,14 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 ### 2. Task Lifecycle
 - **Discovery**: Use \`list_tasks\` or \`search_tasks\` to find your assignment.
 - **Loading**: Start with \`get_task_context_compact(taskId)\`. Use \`get_task_context_full(taskId)\` or \`get_task_section(...)\` only when needed.
-- **Planning**: Before coding, call \`update_task_plan(taskId, plan, model, agent)\` with your technical approach.
+- **Planning**: Before coding, persist a plan using \`update_task_plan(taskId, plan, mode, model, agent)\`.
+  - If you already produced a detailed plan (e.g. plan mode), push it with \`mode: "full"\`.
+  - If no full plan exists, push a short fallback plan with \`mode: "mini"\`.
 - **Execution**: Set status to \`in_progress\` using \`update_task_metadata(taskId, status, priority?, model, agent)\`.
-- **Completion**: After verification, call \`update_task_walkthrough(taskId, walkthrough, model, agent)\` and set status to \`done\` via \`update_task_metadata\`.
+- **Completion**: Before marking done, persist a walkthrough with \`update_task_walkthrough(taskId, walkthrough, mode, model, agent)\`.
+  - If you already produced a detailed walkthrough, push it with \`mode: "full"\`.
+  - If no full walkthrough exists, push a short fallback walkthrough with \`mode: "mini"\`.
+  - \`update_task_metadata(..., status: "done")\` is blocked unless a walkthrough has already been persisted.
 
 ### 3. Compaction & Context Trimming
 - If the system notifies you of context trimming or compaction:
@@ -30,7 +35,41 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 ### 4. Automated Updates (Session End)
 - Do not wait for the user to ask you to record progress.
 - Record plans and walkthroughs as part of your natural workflow to keep the Fenkit platform updated.
+- Full artifacts have priority over mini artifacts. Mini artifacts are only fallback when full artifacts were not provided.
 - Before ending the session, ensure the current task status reflects the actual progress.`;
+
+const FENKIT_PROTOCOL_START = '<!-- FENKIT_TASK_PROTOCOL:START -->';
+const FENKIT_PROTOCOL_END = '<!-- FENKIT_TASK_PROTOCOL:END -->';
+
+function wrapFenkitProtocolBlock(protocol: string): string {
+  return `${FENKIT_PROTOCOL_START}\n${protocol}\n${FENKIT_PROTOCOL_END}`;
+}
+
+function upsertFenkitProtocol(content: string): string {
+  const wrapped = wrapFenkitProtocolBlock(FENKIT_MEMORY_PROTOCOL);
+  const markerRegex = new RegExp(`${FENKIT_PROTOCOL_START}[\\s\\S]*?${FENKIT_PROTOCOL_END}`, 'm');
+  if (markerRegex.test(content)) {
+    return content.replace(markerRegex, wrapped);
+  }
+
+  const legacyProtocolRegex = /## Fenkit Task Protocol[\s\S]*?(?=\n## [^\n]+|\s*$)/m;
+  if (legacyProtocolRegex.test(content)) {
+    return content.replace(legacyProtocolRegex, wrapped);
+  }
+
+  const trimmed = content.trimEnd();
+  if (!trimmed) return wrapped;
+  return `${trimmed}\n\n${wrapped}`;
+}
+
+function writeFenkitProtocolToSharedRulesFile(filePath: string): void {
+  ensureDir(filePath);
+  const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+  const next = upsertFenkitProtocol(current);
+  if (next !== current) {
+    fs.writeFileSync(filePath, next, 'utf-8');
+  }
+}
 
 // ─── Config Path Helpers ───────────────────────────────────────────────────────
 
@@ -180,12 +219,9 @@ export function setupWindsurf(serverPath: string): { path: string; action: strin
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
-  // Append protocol to .windsurfrules if not already present
+  // Upsert protocol in shared rules file
   const rulesPath = path.join(homeDir, '.windsurfrules');
-  const rulesContent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath, 'utf-8') : '';
-  if (!rulesContent.includes('Fenkit Task Protocol')) {
-    fs.appendFileSync(rulesPath, `\n\n${FENKIT_MEMORY_PROTOCOL}`, 'utf-8');
-  }
+  writeFenkitProtocolToSharedRulesFile(rulesPath);
 
   return { path: configPath, action: 'Updated ~/.windsurf/mcp.json and ~/.windsurfrules' };
 }
@@ -203,16 +239,14 @@ export function setupCursor(serverPath: string, projectPath?: string): { path: s
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
-  // Write .cursor/rules/fenkit.mdc memory protocol
+  // Always refresh .cursor/rules/fenkit.mdc with latest protocol
   const rulesDir = path.join(basePath, '.cursor', 'rules');
   if (!fs.existsSync(rulesDir)) {
     fs.mkdirSync(rulesDir, { recursive: true });
   }
   const mdcPath = path.join(rulesDir, 'fenkit.mdc');
-  if (!fs.existsSync(mdcPath)) {
-    const mdcContent = `---\nalwaysApply: true\n---\n\n${FENKIT_MEMORY_PROTOCOL}`;
-    fs.writeFileSync(mdcPath, mdcContent, 'utf-8');
-  }
+  const mdcContent = `---\nalwaysApply: true\n---\n\n${wrapFenkitProtocolBlock(FENKIT_MEMORY_PROTOCOL)}`;
+  fs.writeFileSync(mdcPath, mdcContent, 'utf-8');
 
   return { path: configPath, action: `Updated .cursor/mcp.json and .cursor/rules/fenkit.mdc in ${basePath}` };
 }
@@ -228,13 +262,9 @@ export function setupAntigravity(serverPath: string): { path: string; action: st
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
-  // Append protocol to ~/.gemini/GEMINI.md if not already present
+  // Upsert protocol in shared rules file
   const rulesPath = antigravityRulesPath();
-  ensureDir(rulesPath);
-  const rulesContent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath, 'utf-8') : '';
-  if (!rulesContent.includes('Fenkit Task Protocol')) {
-    fs.appendFileSync(rulesPath, `\n\n${FENKIT_MEMORY_PROTOCOL}`, 'utf-8');
-  }
+  writeFenkitProtocolToSharedRulesFile(rulesPath);
 
   return { path: configPath, action: 'Updated ~/.gemini/antigravity/mcp_config.json and ~/.gemini/GEMINI.md' };
 }
@@ -246,7 +276,7 @@ export function setupCodex(serverPath: string): { path: string; action: string }
   ensureDir(configPath);
 
   // Write fenkit-instructions.md
-  fs.writeFileSync(instructionsPath, FENKIT_MEMORY_PROTOCOL, 'utf-8');
+  fs.writeFileSync(instructionsPath, wrapFenkitProtocolBlock(FENKIT_MEMORY_PROTOCOL), 'utf-8');
 
   // Read existing TOML config or start fresh
   let tomlContent = '';
@@ -298,13 +328,9 @@ export function setupClaudeCode(serverPath: string): { path: string; action: str
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
 
-  // Write .clauderules in the current project
+  // Upsert protocol in shared project rules file
   const rulesPath = path.join(process.cwd(), '.clauderules');
-  let rulesContent = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath, 'utf-8') : '';
-  if (!rulesContent.includes('Fenkit Task Protocol')) {
-    rulesContent += `\n\n${FENKIT_MEMORY_PROTOCOL}`;
-    fs.writeFileSync(rulesPath, rulesContent, 'utf-8');
-  }
+  writeFenkitProtocolToSharedRulesFile(rulesPath);
 
   return { path: configPath, action: 'Updated ~/.claude/config.json and .clauderules' };
 }

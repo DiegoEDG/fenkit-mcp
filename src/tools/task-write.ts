@@ -1,8 +1,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { AxiosInstance } from 'axios';
 import { requireProject } from '../config.js';
 import { getApiClient, formatApiError } from '../api.js';
-import { PlanSchema, WalkthroughSchema } from '../schemas.js';
+import { ArtifactModeSchema, PlanSchema, WalkthroughSchema } from '../schemas.js';
 import { buildExecutionMetadata } from '../utils.js';
 import { resolveTaskByIdentifier } from './task-common.js';
 
@@ -122,6 +123,49 @@ function renderWalkthroughMarkdown(walkthrough: z.infer<typeof WalkthroughSchema
 	return lines.join('\n').trim();
 }
 
+const WRITE_RETRY_ATTEMPTS = 3;
+const WRITE_RETRY_BACKOFF_MS = 250;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
+function delay(ms: number): Promise<void> {
+	return new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+}
+
+async function patchTaskWithRetryAndVerification(
+	api: AxiosInstance,
+	projectId: string,
+	taskId: string,
+	payload: Record<string, unknown>,
+	verify: (task: Awaited<ReturnType<typeof resolveTaskByIdentifier>>) => boolean
+): Promise<void> {
+	let lastError: unknown = undefined;
+
+	for (let attempt = 1; attempt <= WRITE_RETRY_ATTEMPTS; attempt++) {
+		try {
+			await api.patch(`/projects/${projectId}/tasks/${taskId}`, payload);
+			const persisted = await resolveTaskByIdentifier(api, projectId, taskId);
+			if (verify(persisted)) return;
+			lastError = new Error(`Verification failed after write (attempt ${attempt}/${WRITE_RETRY_ATTEMPTS}).`);
+		} catch (error) {
+			lastError = error;
+		}
+
+		if (attempt < WRITE_RETRY_ATTEMPTS) {
+			await delay(WRITE_RETRY_BACKOFF_MS * attempt);
+		}
+	}
+
+	if (lastError instanceof Error) {
+		throw lastError;
+	}
+	throw new Error('Task write failed after retries.');
+}
+
 /**
  * Phase 2 + 3: Task write tools
  * PRD Sections 6.4, 8.2 (auto-inject execution_metadata on writes)
@@ -134,14 +178,16 @@ export function registerTaskWriteTools(server: McpServer): void {
 		{
 			taskId: z.string().describe('Task ID (full UUID or truncated prefix)'),
 			plan: PlanSchema,
+			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete plan already exists.'),
 			model: z.string().describe('Model used for this plan (e.g. "claude-sonnet-4-20250514")'),
 			agent: z.string().describe('Agent/client name (e.g. "cursor", "claude-desktop")')
 		},
-		async ({ taskId, plan, model, agent }) => {
+		async ({ taskId, plan, mode, model, agent }) => {
 			try {
 				// Validate plan schema
 				const parsed = PlanSchema.parse(plan);
 				const planContent = renderPlanMarkdown(parsed);
+				const artifactMode = mode ?? 'mini';
 
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -164,22 +210,38 @@ export function registerTaskWriteTools(server: McpServer): void {
 					...existingMetadata,
 					mcp: {
 						...existingMcp,
-						planSchema: parsed
+						planSchema: parsed,
+						planArtifactMode: artifactMode
 					},
 					lastExecution: execution,
 					history: [...history, { ...execution, action: 'update_plan' }]
 				};
 
-				await api.patch(`/projects/${projectId}/tasks/${currentTask.id}`, {
+				await patchTaskWithRetryAndVerification(
+					api,
+					projectId,
+					currentTask.id,
+					{
 					plan: planContent,
 					implementationMetadata: updatedMetadata
-				});
+					},
+					(persistedTask) => {
+						const persistedMetadata = (persistedTask.implementationMetadata as Record<string, unknown>) || {};
+						const persistedMcp = isRecord(persistedMetadata.mcp) ? persistedMetadata.mcp : {};
+						return (
+							typeof persistedTask.plan === 'string' &&
+							persistedTask.plan.trim() === planContent &&
+							isRecord(persistedMcp.planSchema) &&
+							persistedMcp.planArtifactMode === artifactMode
+						);
+					}
+				);
 
 				return {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}`
+							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}`
 						}
 					]
 				};
@@ -204,13 +266,15 @@ export function registerTaskWriteTools(server: McpServer): void {
 		{
 			taskId: z.string().describe('Task ID (full UUID or truncated prefix)'),
 			walkthrough: WalkthroughSchema,
+			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete walkthrough already exists.'),
 			model: z.string().describe('Model used for this walkthrough'),
 			agent: z.string().describe('Agent/client name')
 		},
-		async ({ taskId, walkthrough, model, agent }) => {
+		async ({ taskId, walkthrough, mode, model, agent }) => {
 			try {
 				const parsed = WalkthroughSchema.parse(walkthrough);
 				const walkthroughContent = renderWalkthroughMarkdown(parsed);
+				const artifactMode = mode ?? 'mini';
 
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -232,22 +296,38 @@ export function registerTaskWriteTools(server: McpServer): void {
 					...existingMetadata,
 					mcp: {
 						...existingMcp,
-						walkthroughSchema: parsed
+						walkthroughSchema: parsed,
+						walkthroughArtifactMode: artifactMode
 					},
 					lastExecution: execution,
 					history: [...history, { ...execution, action: 'update_walkthrough' }]
 				};
 
-				await api.patch(`/projects/${projectId}/tasks/${currentTask.id}`, {
+				await patchTaskWithRetryAndVerification(
+					api,
+					projectId,
+					currentTask.id,
+					{
 					walkthrough: walkthroughContent,
 					implementationMetadata: updatedMetadata
-				});
+					},
+					(persistedTask) => {
+						const persistedMetadata = (persistedTask.implementationMetadata as Record<string, unknown>) || {};
+						const persistedMcp = isRecord(persistedMetadata.mcp) ? persistedMetadata.mcp : {};
+						return (
+							typeof persistedTask.walkthrough === 'string' &&
+							persistedTask.walkthrough.trim() === walkthroughContent &&
+							isRecord(persistedMcp.walkthroughSchema) &&
+							persistedMcp.walkthroughArtifactMode === artifactMode
+						);
+					}
+				);
 
 				return {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}`
+							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}`
 						}
 					]
 				};
@@ -283,6 +363,27 @@ export function registerTaskWriteTools(server: McpServer): void {
 					if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 					const api = getApiClient();
 					const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+
+				if (status === 'done') {
+					const hasWalkthroughText =
+						typeof currentTask.walkthrough === 'string' && currentTask.walkthrough.trim().length > 0;
+					const existingMetadata = (currentTask.implementationMetadata as Record<string, unknown>) || {};
+					const mcp = isRecord(existingMetadata.mcp) ? existingMetadata.mcp : {};
+					const hasWalkthroughSchema = isRecord(mcp.walkthroughSchema);
+
+					if (!hasWalkthroughText && !hasWalkthroughSchema) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text:
+										'INVALID_STATE: Cannot set task to `done` without a persisted walkthrough. Submit `update_task_walkthrough` first (mode `full` if a full artifact exists, otherwise `mini`).'
+								}
+							],
+							isError: true
+						};
+					}
+				}
 
 				const updatePayload: Record<string, unknown> = {};
 				if (status) updatePayload.status = status;
