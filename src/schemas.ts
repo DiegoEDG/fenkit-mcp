@@ -4,7 +4,7 @@ const ShortTextSchema = z.string().trim().min(1).max(240);
 const MediumTextSchema = z.string().trim().min(1).max(2000);
 const PathLikeSchema = z.string().trim().min(1).max(260);
 
-export const TaskStatusSchema = z.enum(['todo', 'in_progress', 'in_review', 'done', 'backlog', 'frozen']);
+export const TaskStatusSchema = z.enum(['todo', 'in_progress', 'in_review', 'backlog', 'frozen']);
 export const TaskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
 export const TaskIdentifierSchema = z
   .string()

@@ -25,7 +25,7 @@ At session start (or after context reset):
 ### 3) Planning
 Before coding, submit a structured plan:
 ```text
-update_task_plan(taskId, plan, model, agent)
+update_task_plan(taskId, operation_id, plan, model, agent)
 ```
 
 ### 4) Execution
@@ -40,12 +40,9 @@ Use `status="in_progress"` when work begins.
 After verification:
 1. Submit walkthrough:
 ```text
-update_task_walkthrough(taskId, walkthrough, model, agent)
+update_task_walkthrough(taskId, operation_id, walkthrough, model, agent)
 ```
-2. Mark task complete:
-```text
-set_task_status(taskId, status="done", operation_id, model, agent)
-```
+2. Task is automatically moved to `in_review` after walkthrough persistence.
 
 ---
 

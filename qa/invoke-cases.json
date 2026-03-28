@@ -1,6 +1,6 @@
 [
   { "prompt": "mark task 23938 as in review", "expected_tool": "set_task_status" },
-  { "prompt": "set this task to done", "expected_tool": "set_task_status" },
+  { "prompt": "set this task to in progress", "expected_tool": "set_task_status" },
   { "prompt": "raise this task to high priority", "expected_tool": "set_task_priority" },
   { "prompt": "create an implementation plan for this task", "expected_tool": "update_task_plan" },
   { "prompt": "document what was implemented and tested", "expected_tool": "update_task_walkthrough" },

@@ -27,7 +27,7 @@ sequenceDiagram
     M->>A: Contexto completo de la tarea
     Note over A: El agente piensa y ejecuta (Con tu aprobación)
     A->>M: update_task_walkthrough()
-    A->>M: set_task_status("Done")
+    A->>M: set_task_status("In Review")
     M->>B: Sync en tiempo real
     B->>U: Notificación: Tarea Finalizada ✅
 ```

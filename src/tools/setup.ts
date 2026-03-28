@@ -23,10 +23,10 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
   - If you already produced a detailed plan (e.g. plan mode), push it with \`mode: "full"\`.
   - If no full plan exists, push a short fallback plan with \`mode: "mini"\`.
 - **Execution**: Set status to \`in_progress\` using \`set_task_status(taskId, status, operation_id, model, agent)\`.
-- **Completion**: Before marking done, persist a walkthrough with \`update_task_walkthrough(taskId, operation_id, walkthrough, mode, model, agent)\`.
+- **Completion**: When work is finished, persist a walkthrough with \`update_task_walkthrough(taskId, operation_id, walkthrough, mode, model, agent)\`.
+  - This automatically moves the task to \`in_review\`.
   - If you already produced a detailed walkthrough, push it with \`mode: "full"\`.
   - If no full walkthrough exists, push a short fallback walkthrough with \`mode: "mini"\`.
-  - \`set_task_status(..., status: "done")\` is blocked unless a walkthrough has already been persisted.
 
 ### 3. Compaction & Context Trimming
 - If the system notifies you of context trimming or compaction:

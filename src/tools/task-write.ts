@@ -792,6 +792,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					projectId,
 					currentTask.id,
 					{
+					status: 'in_review',
 					walkthrough: walkthroughContent,
 					implementationMetadata: updatedMetadata
 					},
@@ -801,6 +802,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 						return (
 							typeof persistedTask.walkthrough === 'string' &&
 							persistedTask.walkthrough.trim() === walkthroughContent &&
+							persistedTask.status === 'in_review' &&
 							isRecord(persistedMcp.walkthroughSchema) &&
 							persistedMcp.walkthroughArtifactMode === artifactMode
 						);
@@ -822,7 +824,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}`
+							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}\n**Status**: in_review`
 						}
 					]
 				};
@@ -850,10 +852,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 	// set_task_status — atomic write
 	server.tool(
 		'set_task_status',
-		'Use when the user explicitly asks to move a task to a lifecycle status.',
+		'Use when the user explicitly asks to move a task to a lifecycle status (except done).',
 		{
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
-			status: TaskStatusSchema.describe('New status: todo, in_progress, in_review, done, backlog, frozen'),
+			status: TaskStatusSchema.describe('New status: todo, in_progress, in_review, backlog, frozen'),
 			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
 			model: z.string().trim().min(1).max(120).describe('Model used (for execution metadata tracking)'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
@@ -924,25 +926,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 									type: 'text' as const,
 									text:
 										'INVALID_STATE: Cannot set task to `in_progress` without a persisted plan after Fenkit retrieval. Submit `update_task_plan` first.'
-								}
-							],
-							isError: true
-						};
-					}
-				}
-
-				if (status === 'done') {
-					const hasWalkthroughText =
-						typeof currentTask.walkthrough === 'string' && currentTask.walkthrough.trim().length > 0;
-					const hasWalkthroughSchema = isRecord(mcp.walkthroughSchema);
-
-					if (!hasWalkthroughText && !hasWalkthroughSchema) {
-						return {
-							content: [
-								{
-									type: 'text' as const,
-									text:
-										'INVALID_STATE: Cannot set task to `done` without a persisted walkthrough. Submit `update_task_walkthrough` first.'
 								}
 							],
 							isError: true

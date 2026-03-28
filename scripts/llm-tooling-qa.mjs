@@ -9,7 +9,7 @@ const source = JSON.parse(fs.readFileSync(casesPath, 'utf-8'));
 function routePrompt(prompt) {
 	const text = prompt.toLowerCase();
 	if (text.includes('waiting in review')) return 'get_tasks_in_review';
-	if ((text.includes('done') || text.includes('in review') || text.includes('status')) && text.includes('task')) {
+	if ((text.includes('done') || text.includes('in review') || text.includes('in progress') || text.includes('status')) && text.includes('task')) {
 		return 'set_task_status';
 	}
 	if (text.includes('priority') || text.includes('urgent')) return 'set_task_priority';
