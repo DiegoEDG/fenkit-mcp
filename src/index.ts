@@ -8,31 +8,28 @@ import { registerTaskReadTools } from './tools/task-read.js';
 import { registerTaskWriteTools } from './tools/task-write.js';
 import { registerSetupTools, setupHandlers, CLIENTS, ClientType } from './tools/setup.js';
 
-const server = new McpServer({
-	name: 'fenkit-mcp',
-	version: '1.0.0',
-	description:
-		'Fenkit MCP Server — LLM-native task coordination layer for AI agents. Discover, plan, execute, and track tasks in the Fenkit platform.'
-});
+type ServerMode = 'all' | 'runtime' | 'admin';
 
-// Phase 1: Auth & Config
-registerAuthTools(server);
-
-// Phase 1: Project Management
-registerProjectTools(server);
-
-// Phase 1: Task Discovery & Retrieval
-registerTaskReadTools(server);
-
-// Phase 2: Task Writes (Plan, Walkthrough, Metadata)
-registerTaskWriteTools(server);
-
-// Setup: Client Configuration (Claude, Cursor, Windsurf, Codex, OpenCode, Antigravity, Claude Code)
-registerSetupTools(server);
+function parseMode(args: string[]): { mode: ServerMode; args: string[] } {
+	const modeArg = args.find((arg) => arg.startsWith('--mode='));
+	if (!modeArg) return { mode: 'all', args };
+	const raw = modeArg.slice('--mode='.length);
+	const mode: ServerMode = raw === 'runtime' || raw === 'admin' ? raw : 'all';
+	return { mode, args: args.filter((arg) => arg !== modeArg) };
+}
 
 // Start the server with stdio transport
 async function main(): Promise<void> {
-	const args = process.argv.slice(2);
+	const parsed = parseMode(process.argv.slice(2));
+	const args = parsed.args;
+	const mode = parsed.mode;
+
+	const server = new McpServer({
+		name: mode === 'all' ? 'fenkit-mcp' : `fenkit-mcp-${mode}`,
+		version: '1.0.0',
+		description:
+			'Fenkit MCP Server — LLM-native task coordination layer for AI agents. Discover, plan, execute, and track tasks in the Fenkit platform.'
+	});
 
 	// Manual Setup Command: node dist/index.js setup <client>
 	if (args[0] === 'setup') {
@@ -57,6 +54,23 @@ async function main(): Promise<void> {
 			console.error(`❌ Error setting up ${client}:`, error instanceof Error ? error.message : error);
 			process.exit(1);
 		}
+	}
+
+	if (mode === 'admin') {
+		registerAuthTools(server, { includeLogin: true, includeStatus: true });
+		registerSetupTools(server);
+	} else if (mode === 'runtime') {
+		registerAuthTools(server, { includeLogin: false, includeStatus: true });
+		registerProjectTools(server);
+		registerTaskReadTools(server);
+		registerTaskWriteTools(server);
+	} else {
+		// Backward-compatible single-server mode
+		registerAuthTools(server);
+		registerProjectTools(server);
+		registerTaskReadTools(server);
+		registerTaskWriteTools(server);
+		registerSetupTools(server);
 	}
 
 	// Default: Start MCP Server

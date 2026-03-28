@@ -19,6 +19,12 @@ export function registerProjectTools(server: McpServer): void {
     'list_projects',
     'List all accessible projects in your Fenkit workspace. Returns project IDs, names, and descriptions. Use this to discover projects before selecting one.',
     {},
+    {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     async () => {
       try {
         requireAuth();
@@ -59,6 +65,12 @@ export function registerProjectTools(server: McpServer): void {
     'get_active_project',
     'Get the currently active project. Returns the project name and ID from local config.',
     {},
+    {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
     async () => {
       try {
         const config = requireAuth();
@@ -88,6 +100,12 @@ export function registerProjectTools(server: McpServer): void {
     'Set the active project by ID. All subsequent task operations will use this project. Call `list_projects` first to discover available project IDs.',
     {
       projectId: z.string().describe('Project ID to select as active'),
+    },
+    {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
     },
     async ({ projectId }) => {
       try {

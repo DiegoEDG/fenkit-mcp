@@ -38,6 +38,10 @@ export const TokensSchema = z.object({
   total: z.number().optional().describe('Total tokens used'),
   estimate: z.number().optional().describe('Estimated token count'),
 });
+export const TokenSourceSchema = z
+  .enum(['exact', 'estimate', 'mixed'])
+  .optional()
+  .describe('How token values were produced: exact from client, estimate fallback, or mixed.');
 
 export const ExecutionMetadataSchema = z.object({
   durationMs: z.number().optional().describe('Time spent in milliseconds'),
@@ -45,6 +49,10 @@ export const ExecutionMetadataSchema = z.object({
   model: z.string().optional().describe('Model identifier (e.g. gpt-4.1, claude-sonnet)'),
   provider: z.string().optional().describe('Provider name (e.g. openai, anthropic)'),
   tokens: TokensSchema.optional().describe('Token usage'),
+  token_source: TokenSourceSchema,
+  chat_id: z.string().optional().describe('Chat/thread identifier from the AI client'),
+  chat_name: z.string().optional().describe('Chat/thread display name from the AI client'),
+  session_id: z.string().optional().describe('MCP transport session identifier'),
   timestamp: z.string().optional().describe('ISO-8601 timestamp'),
 });
 export type ExecutionMetadata = z.infer<typeof ExecutionMetadataSchema>;

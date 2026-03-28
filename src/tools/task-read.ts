@@ -8,6 +8,7 @@ import { resolveTaskByIdentifier, updateTaskLastRetrievedAt, type TaskResponse }
 const STATUS_ICONS: Record<string, string> = {
 	todo: '📋',
 	in_progress: '🏗️',
+	in_review: '🔍',
 	done: '✅',
 	backlog: '📥',
 	frozen: '❄️'
@@ -41,15 +42,31 @@ function stripAndTruncate(content: string, maxChars: number): string {
 
 function compactExecution(execution: unknown): Record<string, unknown> | null {
 	if (!isRecord(execution)) return null;
+	const git = isRecord(execution.git) ? execution.git : {};
 	return {
 		timestamp: execution.timestamp,
+		executed_at: execution.executed_at ?? execution.timestamp,
+		'Executed at': execution.executed_at ?? execution.timestamp,
 		model: execution.model,
 		agent: execution.agent,
+		'Agent/Client': execution.agent_client ?? execution.agent,
 		provider: execution.provider,
 		durationMs: execution.durationMs,
+		duration: execution.duration ?? execution.durationMs,
+		token_source: execution.token_source,
+		chat_id: execution.chat_id,
+		chat_name: execution.chat_name,
+		chat_title: execution.chat_title ?? execution.chat_name,
+		'Chat title': execution.chat_title ?? execution.chat_name,
+		git_branch: execution.git_branch ?? git.branch,
+		'Git branch': execution.git_branch ?? git.branch,
+		git_repo: execution.git_repo ?? git.repo,
+		'Git Repo': execution.git_repo ?? git.repo,
 		tokens: isRecord(execution.tokens)
 			? { estimate: execution.tokens.estimate, total: execution.tokens.total }
-			: undefined
+			: undefined,
+		total_tokens: execution.total_tokens ?? execution['total tokens'],
+		'total tokens': execution.total_tokens ?? execution['total tokens']
 	};
 }
 
@@ -70,6 +87,10 @@ function sanitizeMetadata(meta: Record<string, unknown>): Record<string, unknown
 function renderCompactContext(task: TaskResponse, options: CompactOptions): string {
 	const meta = sanitizeMetadata((task.implementationMetadata as Record<string, unknown>) || {});
 	const { planSchema, walkthroughSchema } = getMcpSchemas(meta);
+	const mcp = isRecord(meta.mcp) ? meta.mcp : {};
+	const mcpAnalytics = isRecord(mcp.analytics) ? mcp.analytics : {};
+	const overallTokens = isRecord(mcpAnalytics.overallTokens) ? mcpAnalytics.overallTokens : null;
+	const latestChat = isRecord(mcp.chat) ? mcp.chat : null;
 	const history = Array.isArray(meta.history) ? meta.history : [];
 	const compactHistory = history
 		.slice(-options.historyLimit)
@@ -120,6 +141,27 @@ function renderCompactContext(task: TaskResponse, options: CompactOptions): stri
 		sections.push('## Latest Execution');
 		sections.push('```json');
 		sections.push(JSON.stringify(latestExecution));
+		sections.push('```');
+		sections.push('');
+	}
+
+	if (latestChat) {
+		sections.push('## Latest Chat Context');
+		sections.push(`- Chat ID: ${String(latestChat.id || 'n/a')}`);
+		sections.push(`- Chat name: ${String(latestChat.name || 'n/a')}`);
+		sections.push(`- Last seen: ${String(latestChat.lastSeenAt || 'n/a')}`);
+		sections.push('');
+	}
+
+	if (overallTokens) {
+		sections.push('## Cumulative Tokens');
+		sections.push('```json');
+		sections.push(
+			JSON.stringify({
+				source: mcpAnalytics.overallTokenSource,
+				totals: overallTokens
+			})
+		);
 		sections.push('```');
 		sections.push('');
 	}
@@ -239,17 +281,23 @@ export function registerTaskReadTools(server: McpServer): void {
 				.string()
 				.optional()
 				.describe(
-					'Comma-separated status filter (e.g. "todo,in_progress"). Default: "todo,in_progress". Options: todo, in_progress, done, backlog, frozen'
-				)
-		},
-		async ({ status }) => {
+					'Comma-separated status filter (e.g. "todo,in_progress"). Default: "todo,in_progress,in_review". Options: todo, in_progress, in_review, done, backlog, frozen'
+					)
+			},
+			{
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: true
+			},
+			async ({ status }) => {
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const params = new URLSearchParams();
-				const statusFilter = status || 'todo,in_progress';
+				const statusFilter = status || 'todo,in_progress,in_review';
 				params.set('status', statusFilter);
 
 				const { data } = await api.get<TaskResponse[]>(
@@ -262,7 +310,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					};
 				}
 
-				const statusOrder = ['in_progress', 'todo', 'frozen', 'backlog', 'done'];
+				const statusOrder = ['in_progress', 'in_review', 'todo', 'frozen', 'backlog', 'done'];
 				const tasksByStatus: Record<string, TaskResponse[]> = {};
 
 				for (const t of data) {
@@ -300,6 +348,12 @@ export function registerTaskReadTools(server: McpServer): void {
 		'Search tasks by name or description in the active project. Returns matching tasks with their IDs and status.',
 		{
 			query: z.string().describe('Search query to match against task titles and descriptions')
+		},
+		{
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
 		},
 		async ({ query }) => {
 			try {
@@ -356,7 +410,13 @@ export function registerTaskReadTools(server: McpServer): void {
 				.min(500)
 				.max(MAX_ALLOWED_CHARS)
 				.optional()
-				.describe('Max chars for long text fields (default: 3500)')
+					.describe('Max chars for long text fields (default: 3500)')
+		},
+		{
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
 		},
 		async ({ taskId, historyLimit, maxChars }) => {
 			try {
@@ -387,6 +447,12 @@ export function registerTaskReadTools(server: McpServer): void {
 		'Returns complete task context (description, full plan/walkthrough, full metadata). Use only when compact context is insufficient.',
 		{
 			taskId: z.string().describe('Task ID (full UUID or truncated prefix like "22b50")')
+		},
+		{
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
 		},
 		async ({ taskId }) => {
 			try {
@@ -426,7 +492,13 @@ export function registerTaskReadTools(server: McpServer): void {
 				.min(500)
 				.max(MAX_ALLOWED_CHARS)
 				.optional()
-				.describe('Max chars for section payload (default: 3500)')
+					.describe('Max chars for section payload (default: 3500)')
+		},
+		{
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
 		},
 		async ({ taskId, section, historyLimit, maxChars }) => {
 			try {
@@ -473,7 +545,13 @@ export function registerTaskReadTools(server: McpServer): void {
 				.min(500)
 				.max(MAX_ALLOWED_CHARS)
 				.optional()
-				.describe('Text cap for compact/section output')
+					.describe('Text cap for compact/section output')
+		},
+		{
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
 		},
 		async ({ taskId, mode, section, historyLimit, maxChars }) => {
 			try {

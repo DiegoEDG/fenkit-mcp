@@ -1,4 +1,5 @@
 import os from 'node:os';
+import path from 'node:path';
 import { execSync } from 'node:child_process';
 import type { ExecutionMetadata } from './schemas.js';
 
@@ -62,41 +63,53 @@ export function getProvider(model?: string): string {
  * Mirrors CLI logic in getGitInfo().
  */
 export function getGitInfo(): Record<string, unknown> | null {
-	try {
-		const commit = execSync('git rev-parse HEAD', {
-			stdio: ['ignore', 'pipe', 'ignore']
-		})
-			.toString()
-			.trim();
-		const branch = execSync('git rev-parse --abbrev-ref HEAD', {
-			stdio: ['ignore', 'pipe', 'ignore']
-		})
-			.toString()
-			.trim();
+	const execGit = (command: string): string | undefined => {
+		try {
+			const output = execSync(command, {
+				stdio: ['ignore', 'pipe', 'ignore']
+			})
+				.toString()
+				.trim();
+			return output.length > 0 ? output : undefined;
+		} catch {
+			return undefined;
+		}
+	};
 
-		const stats = execSync('git diff --stat', {
-			stdio: ['ignore', 'pipe', 'ignore']
-		})
-			.toString()
-			.trim();
-
-		const filesChanged = stats ? stats.split('\n').length - 1 : 0;
-		const linesMatch = stats.match(/(\d+) insertion.*(\d+) deletion/);
-		const insertions = linesMatch ? parseInt(linesMatch[1]) : 0;
-		const deletions = linesMatch ? parseInt(linesMatch[2]) : 0;
-
+	const isRepo = execGit('git rev-parse --is-inside-work-tree') === 'true';
+	if (!isRepo) {
 		return {
-			commit,
-			branch,
+			repo: 'unknown',
+			commit: 'unknown',
+			branch: 'unknown',
 			metrics: {
-				filesChanged: filesChanged > 0 ? filesChanged : 0,
-				linesAdded: insertions,
-				linesDeleted: deletions
+				filesChanged: 0,
+				linesAdded: 0,
+				linesDeleted: 0
 			}
 		};
-	} catch {
-		return null;
 	}
+
+	const repoRoot = execGit('git rev-parse --show-toplevel');
+	const repo = execGit('git config --get remote.origin.url') ?? (repoRoot ? path.basename(repoRoot) : 'unknown');
+	const commit = execGit('git rev-parse HEAD') ?? 'unknown';
+	const branch = execGit('git rev-parse --abbrev-ref HEAD') ?? 'unknown';
+	const shortstat = execGit('git diff --shortstat') ?? '';
+
+	const filesChangedMatch = shortstat.match(/(\d+)\s+files?\s+changed/);
+	const insertionsMatch = shortstat.match(/(\d+)\s+insertions?\(\+\)/);
+	const deletionsMatch = shortstat.match(/(\d+)\s+deletions?\(-\)/);
+
+	return {
+		repo,
+		commit,
+		branch,
+		metrics: {
+			filesChanged: filesChangedMatch ? parseInt(filesChangedMatch[1], 10) : 0,
+			linesAdded: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
+			linesDeleted: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0
+		}
+	};
 }
 
 /**
@@ -110,9 +123,14 @@ export function buildExecutionMetadata(
 		model?: string;
 		agent?: string;
 		lastRetrievedAt?: string;
+		sessionId?: string;
+		chatId?: string;
+		chatName?: string;
+		tokenSource?: 'exact' | 'estimate' | 'mixed';
 		extraTokens?: { input?: number; output?: number; total?: number };
 	}
 ): ExecutionMetadata & Record<string, unknown> {
+	const nowIso = new Date().toISOString();
 	let durationMs: number | undefined;
 	if (options?.lastRetrievedAt) {
 		const start = new Date(options.lastRetrievedAt).getTime();
@@ -122,15 +140,22 @@ export function buildExecutionMetadata(
 	const provider = getProvider(options?.model);
 
 	return {
-		timestamp: new Date().toISOString(),
-		durationMs,
+		timestamp: nowIso,
+		executed_at: nowIso,
+		durationMs: durationMs ?? 0,
 		agent: options?.agent || 'mcp-server',
-		model: options?.model,
+		agent_client: options?.agent || 'mcp-server',
+		model: options?.model || 'unknown',
 		provider,
 		tokens: {
 			estimate: Math.ceil(content.length / 4),
 			...options?.extraTokens
 		},
+		token_source: options?.tokenSource,
+		session_id: options?.sessionId,
+		chat_id: options?.chatId,
+		chat_name: options?.chatName,
+		chat_title: options?.chatName || 'Unknown chat',
 		git: getGitInfo(),
 		env: {
 			os: os.platform(),

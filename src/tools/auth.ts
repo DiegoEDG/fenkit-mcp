@@ -163,7 +163,13 @@ function waitForToken(port: number, expectedState: string, allowedOrigin: string
  * Phase 1: Authentication tools
  * PRD Section 6.5 + 9
  */
-export function registerAuthTools(server: McpServer): void {
+export function registerAuthTools(
+	server: McpServer,
+	options?: { includeLogin?: boolean; includeStatus?: boolean }
+): void {
+	const includeLogin = options?.includeLogin ?? true;
+	const includeStatus = options?.includeStatus ?? true;
+
 	// login — Shared handler for browser-based auth
 	const loginHandler = async ({ appUrl, apiUrl }: { appUrl?: string; apiUrl?: string }) => {
 		const resolvedAppUrl = appUrl ?? getDefaultAppUrl();
@@ -281,25 +287,40 @@ export function registerAuthTools(server: McpServer): void {
 	};
 
 	// Primary login tool
-	server.tool(
-		'login',
-		'Authenticate via browser. Opens a browser window pointing to the Fenkit app, waits for authentication, then saves the token automatically.',
-		{
-			appUrl: z.string().optional().describe('Frontend app URL (default: https://ickit-fe.vercel.app)'),
-			apiUrl: z.string().optional().describe('API base URL (default: https://ickit-be.vercel.app/api/v1)')
-		},
-		loginHandler
-	);
+	if (includeLogin) {
+		server.tool(
+			'login',
+			'Authenticate via browser. Opens a browser window pointing to the Fenkit app, waits for authentication, then saves the token automatically.',
+			{
+				appUrl: z.string().optional().describe('Frontend app URL (default: https://ickit-fe.vercel.app)'),
+				apiUrl: z.string().optional().describe('API base URL (default: https://ickit-be.vercel.app/api/v1)')
+			},
+			{
+				readOnlyHint: false,
+				destructiveHint: false,
+				idempotentHint: false,
+				openWorldHint: true
+			},
+			loginHandler
+		);
+	}
 
 	// get_status — Returns current auth and project status
-	server.tool(
-		'get_status',
-		'Check current authentication status and active project. Call this to verify your setup before starting work.',
-		{},
-		async () => {
-			const config = loadConfig();
-			const authenticated = !!config.token;
-			const hasProject = !!config.currentProjectId;
+	if (includeStatus) {
+		server.tool(
+			'get_status',
+			'Check current authentication status and active project. Call this to verify your setup before starting work.',
+			{},
+			{
+				readOnlyHint: true,
+				destructiveHint: false,
+				idempotentHint: true,
+				openWorldHint: false
+			},
+			async () => {
+				const config = loadConfig();
+				const authenticated = !!config.token;
+				const hasProject = !!config.currentProjectId;
 
 				const lines = [
 					`**Authenticated**: ${authenticated ? '✅ Yes' : "❌ No — run 'login' first"}`,
@@ -316,6 +337,7 @@ export function registerAuthTools(server: McpServer): void {
 			return {
 				content: [{ type: 'text' as const, text: lines.join('\n') }]
 			};
-		}
-	);
+			}
+		);
+	}
 }

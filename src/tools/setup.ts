@@ -19,6 +19,7 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 - **Discovery**: Use \`list_tasks\` or \`search_tasks\` to find your assignment.
 - **Loading**: Start with \`get_task_context_compact(taskId)\`. Use \`get_task_context_full(taskId)\` or \`get_task_section(...)\` only when needed.
 - **Planning**: Before coding, persist a plan using \`update_task_plan(taskId, plan, mode, model, agent)\`.
+  - After the user approves implementation and after the task was loaded with Fenkit retrieval tools, you MUST persist plan before the first execution update.
   - If you already produced a detailed plan (e.g. plan mode), push it with \`mode: "full"\`.
   - If no full plan exists, push a short fallback plan with \`mode: "mini"\`.
 - **Execution**: Set status to \`in_progress\` using \`update_task_metadata(taskId, status, priority?, model, agent)\`.
@@ -186,11 +187,29 @@ function readJsonOrDefault<T extends Record<string, unknown>>(filePath: string, 
   }
 }
 
-function fenKitMcpEntry(serverPath: string) {
+function upsertTomlServerBlock(tomlContent: string, name: string, block: string): string {
+  const pattern = new RegExp(`(^|\\n)\\[mcp_servers\\.${name}\\][\\s\\S]*?(?=\\n\\[[^\\]]+\\]|$)`);
+  if (pattern.test(tomlContent)) {
+    return tomlContent.replace(pattern, (_match, prefix: string) => `${prefix}${block}\n`);
+  }
+  const trimmed = tomlContent.trimEnd();
+  if (!trimmed) return `${block}\n`;
+  return `${trimmed}\n\n${block}\n`;
+}
+
+type FenkitMode = 'runtime' | 'admin';
+
+function fenKitMcpEntry(serverPath: string, mode: FenkitMode) {
   return {
     command: 'node',
-    args: [serverPath],
+    args: [serverPath, `--mode=${mode}`],
   };
+}
+
+function applyDualFenkitServers(container: Record<string, unknown>, serverPath: string): Record<string, unknown> {
+  container['fenkit'] = fenKitMcpEntry(serverPath, 'runtime');
+  container['fenkit_admin'] = fenKitMcpEntry(serverPath, 'admin');
+  return container;
 }
 
 // ─── Client Setup Functions ───────────────────────────────────────────────────
@@ -201,7 +220,7 @@ export function setupClaude(serverPath: string): { path: string; action: string 
 
   const config = readJsonOrDefault<Record<string, unknown>>(configPath, {});
   const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
-  mcpServers['fenkit'] = fenKitMcpEntry(serverPath);
+  applyDualFenkitServers(mcpServers, serverPath);
   config['mcpServers'] = mcpServers;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
@@ -214,7 +233,7 @@ export function setupWindsurf(serverPath: string): { path: string; action: strin
 
   const config = readJsonOrDefault<Record<string, unknown>>(configPath, {});
   const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
-  mcpServers['fenkit'] = fenKitMcpEntry(serverPath);
+  applyDualFenkitServers(mcpServers, serverPath);
   config['mcpServers'] = mcpServers;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
@@ -234,7 +253,7 @@ export function setupCursor(serverPath: string, projectPath?: string): { path: s
 
   const config = readJsonOrDefault<Record<string, unknown>>(configPath, {});
   const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
-  mcpServers['fenkit'] = fenKitMcpEntry(serverPath);
+  applyDualFenkitServers(mcpServers, serverPath);
   config['mcpServers'] = mcpServers;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
@@ -257,7 +276,7 @@ export function setupAntigravity(serverPath: string): { path: string; action: st
 
   const config = readJsonOrDefault<Record<string, unknown>>(configPath, {});
   const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
-  mcpServers['fenkit'] = fenKitMcpEntry(serverPath);
+  applyDualFenkitServers(mcpServers, serverPath);
   config['mcpServers'] = mcpServers;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
@@ -290,11 +309,10 @@ export function setupCodex(serverPath: string): { path: string; action: string }
     tomlContent = header + tomlContent;
   }
 
-  // Add [mcp_servers.fenkit] block if not present
-  if (!tomlContent.includes('[mcp_servers.fenkit]')) {
-    const block = `\n[mcp_servers.fenkit]\ncommand = "node"\nargs = ["${serverPath}"]\n`;
-    tomlContent += block;
-  }
+  const runtimeBlock = `[mcp_servers.fenkit]\ncommand = "node"\nargs = ["${serverPath}", "--mode=runtime"]`;
+  const adminBlock = `[mcp_servers.fenkit_admin]\ncommand = "node"\nargs = ["${serverPath}", "--mode=admin"]`;
+  tomlContent = upsertTomlServerBlock(tomlContent, 'fenkit', runtimeBlock);
+  tomlContent = upsertTomlServerBlock(tomlContent, 'fenkit_admin', adminBlock);
 
   fs.writeFileSync(configPath, tomlContent, 'utf-8');
   return { path: configPath, action: `Updated ${configPath} and wrote ${instructionsPath}` };
@@ -309,12 +327,17 @@ export function setupOpenCode(serverPath: string): { path: string; action: strin
   mcp['fenkit'] = {
     type: 'local',
     enabled: true,
-    command: ['node', serverPath],
+    command: ['node', serverPath, '--mode=runtime'],
+  };
+  mcp['fenkit_admin'] = {
+    type: 'local',
+    enabled: true,
+    command: ['node', serverPath, '--mode=admin'],
   };
   config['mcp'] = mcp;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-  return { path: configPath, action: 'Updated opencode.json (mcp.fenkit)' };
+  return { path: configPath, action: 'Updated opencode.json (mcp.fenkit + mcp.fenkit_admin)' };
 }
 
 export function setupClaudeCode(serverPath: string): { path: string; action: string } {
@@ -323,7 +346,7 @@ export function setupClaudeCode(serverPath: string): { path: string; action: str
 
   const config = readJsonOrDefault<Record<string, unknown>>(configPath, {});
   const mcpServers = (config['mcpServers'] as Record<string, unknown>) ?? {};
-  mcpServers['fenkit'] = fenKitMcpEntry(serverPath);
+  applyDualFenkitServers(mcpServers, serverPath);
   config['mcpServers'] = mcpServers;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
@@ -391,7 +414,8 @@ export function registerSetupTools(server: McpServer): void {
           ``,
           `**Action**: ${result.action}`,
           `**Config path**: \`${result.path}\``,
-          `**Server**: \`node ${serverPath}\``,
+          `**Runtime server**: \`node ${serverPath} --mode=runtime\``,
+          `**Admin server**: \`node ${serverPath} --mode=admin\``,
           ``,
           `**Next steps**:`,
           `1. Restart ${clientDisplayName(client)} to load the new config.`,
@@ -421,7 +445,8 @@ export function registerSetupTools(server: McpServer): void {
     },
     async ({ client }) => {
       const serverPath = getServerPath();
-      const entry = `{\n  "command": "node",\n  "args": ["${serverPath}"]\n}`;
+      const runtimeEntry = `{\n  "command": "node",\n  "args": ["${serverPath}", "--mode=runtime"]\n}`;
+      const adminEntry = `{\n  "command": "node",\n  "args": ["${serverPath}", "--mode=admin"]\n}`;
 
       const instructions: Record<string, string> = {
         claude: [
@@ -429,7 +454,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + entry.replace(/\n/g, '\n    '),
+          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
           '```',
@@ -440,7 +466,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + entry.replace(/\n/g, '\n    '),
+          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
           '```',
@@ -460,7 +487,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + entry.replace(/\n/g, '\n    '),
+          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
           '```',
@@ -476,7 +504,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + entry.replace(/\n/g, '\n    '),
+          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
           '```',
@@ -494,7 +523,11 @@ export function registerSetupTools(server: McpServer): void {
           '',
           '[mcp_servers.fenkit]',
           'command = "node"',
-          `args = ["${serverPath}"]`,
+          `args = ["${serverPath}", "--mode=runtime"]`,
+          '',
+          '[mcp_servers.fenkit_admin]',
+          'command = "node"',
+          `args = ["${serverPath}", "--mode=admin"]`,
           '```',
           '',
           `Also create \`${codexInstructionsPath()}\` with the Fenkit protocol:`,
@@ -512,7 +545,12 @@ export function registerSetupTools(server: McpServer): void {
           '    "fenkit": {',
           '      "type": "local",',
           '      "enabled": true,',
-          '      "command": ["node", "' + serverPath + '"]',
+          '      "command": ["node", "' + serverPath + '", "--mode=runtime"]',
+          '    },',
+          '    "fenkit_admin": {',
+          '      "type": "local",',
+          '      "enabled": true,',
+          '      "command": ["node", "' + serverPath + '", "--mode=admin"]',
           '    }',
           '  }',
           '}',
@@ -523,7 +561,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + entry.replace(/\n/g, '\n    '),
+          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
           '```',
