@@ -18,15 +18,15 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 ### 2. Task Lifecycle
 - **Discovery**: Use \`list_tasks\` or \`search_tasks\` to find your assignment.
 - **Loading**: Start with \`get_task_context_compact(taskId)\`. Use \`get_task_context_full(taskId)\` or \`get_task_section(...)\` only when needed.
-- **Planning**: Before coding, persist a plan using \`update_task_plan(taskId, plan, mode, model, agent)\`.
+- **Planning**: Before coding, persist a plan using \`update_task_plan(taskId, operation_id, plan, mode, model, agent)\`.
   - After the user approves implementation and after the task was loaded with Fenkit retrieval tools, you MUST persist plan before the first execution update.
   - If you already produced a detailed plan (e.g. plan mode), push it with \`mode: "full"\`.
   - If no full plan exists, push a short fallback plan with \`mode: "mini"\`.
-- **Execution**: Set status to \`in_progress\` using \`update_task_metadata(taskId, status, priority?, model, agent)\`.
-- **Completion**: Before marking done, persist a walkthrough with \`update_task_walkthrough(taskId, walkthrough, mode, model, agent)\`.
+- **Execution**: Set status to \`in_progress\` using \`set_task_status(taskId, status, operation_id, model, agent)\`.
+- **Completion**: Before marking done, persist a walkthrough with \`update_task_walkthrough(taskId, operation_id, walkthrough, mode, model, agent)\`.
   - If you already produced a detailed walkthrough, push it with \`mode: "full"\`.
   - If no full walkthrough exists, push a short fallback walkthrough with \`mode: "mini"\`.
-  - \`update_task_metadata(..., status: "done")\` is blocked unless a walkthrough has already been persisted.
+  - \`set_task_status(..., status: "done")\` is blocked unless a walkthrough has already been persisted.
 
 ### 3. Compaction & Context Trimming
 - If the system notifies you of context trimming or compaction:

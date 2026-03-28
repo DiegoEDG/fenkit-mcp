@@ -21,7 +21,6 @@ At session start (or after context reset):
 - Use `list_tasks` or `search_tasks` to identify work.
 - Retrieve context with `get_task_context_compact(taskId)`.
 - If needed, expand with `get_task_context_full(taskId)` or `get_task_section(...)`.
-- `get_full_task` remains supported as a deprecated alias.
 
 ### 3) Planning
 Before coding, submit a structured plan:
@@ -32,7 +31,8 @@ update_task_plan(taskId, plan, model, agent)
 ### 4) Execution
 When starting implementation:
 ```text
-update_task_metadata(taskId, status, priority?, model, agent)
+set_task_status(taskId, status, operation_id, model, agent)
+set_task_priority(taskId, priority, operation_id, model, agent)
 ```
 Use `status="in_progress"` when work begins.
 
@@ -44,7 +44,7 @@ update_task_walkthrough(taskId, walkthrough, model, agent)
 ```
 2. Mark task complete:
 ```text
-update_task_metadata(taskId, status="done", model, agent)
+set_task_status(taskId, status="done", operation_id, model, agent)
 ```
 
 ---

@@ -15,7 +15,8 @@
 		"build": "tsup",
 		"dev": "tsup --watch",
 		"start": "node dist/index.js",
-		"lint": "eslint src"
+		"lint": "eslint src",
+		"qa:invoke": "node scripts/llm-tooling-qa.mjs"
 	},
 	"keywords": [
 		"mcp",

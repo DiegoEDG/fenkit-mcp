@@ -3,9 +3,19 @@ import { z } from 'zod';
 import type { AxiosInstance } from 'axios';
 import { requireProject } from '../config.js';
 import { getApiClient, formatApiError } from '../api.js';
-import { ArtifactModeSchema, PlanSchema, TokensSchema, WalkthroughSchema } from '../schemas.js';
+import {
+	ArtifactModeSchema,
+	OperationIdSchema,
+	PlanSchema,
+	TaskIdentifierSchema,
+	TaskPrioritySchema,
+	TaskStatusSchema,
+	TokensSchema,
+	WalkthroughSchema
+} from '../schemas.js';
 import { buildExecutionMetadata } from '../utils.js';
 import { resolveTaskByIdentifier } from './task-common.js';
+import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observability.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
 	const lines: string[] = [];
@@ -151,6 +161,12 @@ interface ResolvedChatContext {
 	sessionId: string;
 }
 
+interface OperationEntry {
+	tool: string;
+	payloadHash: string;
+	timestamp: string;
+}
+
 function toFiniteNumber(value: unknown): number | undefined {
 	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -193,6 +209,45 @@ function resolveTokens(content: string, provided?: z.infer<typeof TokensSchema>)
 		},
 		tokenSource
 	};
+}
+
+function getOperationLedger(mcp: Record<string, unknown>): Record<string, OperationEntry> {
+	const existing = isRecord(mcp.operationLedger) ? mcp.operationLedger : {};
+	const output: Record<string, OperationEntry> = {};
+	for (const [key, value] of Object.entries(existing)) {
+		if (!isRecord(value)) continue;
+		const tool = typeof value.tool === 'string' ? value.tool : undefined;
+		const payloadHash = typeof value.payloadHash === 'string' ? value.payloadHash : undefined;
+		const timestamp = typeof value.timestamp === 'string' ? value.timestamp : undefined;
+		if (!tool || !payloadHash || !timestamp) continue;
+		output[key] = { tool, payloadHash, timestamp };
+	}
+	return output;
+}
+
+function upsertOperationLedger(
+	ledger: Record<string, OperationEntry>,
+	operationId: string,
+	entry: OperationEntry,
+	limit = 200
+): Record<string, OperationEntry> {
+	const merged = { ...ledger, [operationId]: entry };
+	const entries = Object.entries(merged).sort((a, b) => b[1].timestamp.localeCompare(a[1].timestamp));
+	return Object.fromEntries(entries.slice(0, limit));
+}
+
+function checkIdempotentOperation(options: {
+	ledger: Record<string, OperationEntry>;
+	operationId: string;
+	tool: string;
+	payloadHash: string;
+}): { duplicate: boolean; conflict: boolean } {
+	const existing = options.ledger[options.operationId];
+	if (!existing) return { duplicate: false, conflict: false };
+	if (existing.tool === options.tool && existing.payloadHash === options.payloadHash) {
+		return { duplicate: true, conflict: false };
+	}
+	return { duplicate: false, conflict: true };
 }
 
 function accumulateTotals(previous: unknown, delta: TokenTotals): TokenTotals {
@@ -340,14 +395,14 @@ async function patchTaskWithRetryAndVerification(
 	taskId: string,
 	payload: Record<string, unknown>,
 	verify: (task: Awaited<ReturnType<typeof resolveTaskByIdentifier>>) => boolean
-): Promise<void> {
+): Promise<number> {
 	let lastError: unknown = undefined;
 
 	for (let attempt = 1; attempt <= WRITE_RETRY_ATTEMPTS; attempt++) {
 		try {
 			await api.patch(`/projects/${projectId}/tasks/${taskId}`, payload);
 			const persisted = await resolveTaskByIdentifier(api, projectId, taskId);
-			if (verify(persisted)) return;
+			if (verify(persisted)) return attempt;
 			lastError = new Error(`Verification failed after write (attempt ${attempt}/${WRITE_RETRY_ATTEMPTS}).`);
 		} catch (error) {
 			lastError = error;
@@ -372,24 +427,26 @@ export function registerTaskWriteTools(server: McpServer): void {
 	// update_task_plan — PATCH with structured plan
 	server.tool(
 		'update_task_plan',
-		'Submit or update an implementation plan for a task. The plan must follow the structured schema with summary, steps, files_affected, etc. Use this after retrieving compact context and analyzing the requirements. Stores full markdown plan plus structured schema in metadata.',
+		'Use when the user asks to define or revise an implementation plan for a task before coding.',
 		{
-			taskId: z.string().describe('Task ID (full UUID or truncated prefix)'),
+			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
+			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
 			plan: PlanSchema,
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete plan already exists.'),
-			model: z.string().describe('Model used for this plan (e.g. "claude-sonnet-4-20250514")'),
-			agent: z.string().describe('Agent/client name (e.g. "cursor", "claude-desktop")'),
+			model: z.string().trim().min(1).max(120).describe('Model used for this plan (e.g. "claude-sonnet-4-20250514")'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "cursor", "claude-desktop")'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
-			chat_id: z.string().optional().describe('Optional chat/thread identifier'),
-			chat_name: z.string().optional().describe('Optional chat/thread display name')
+			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
+			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
 		},
 		{
 			readOnlyHint: false,
 			destructiveHint: false,
-			idempotentHint: false,
+			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId, plan, mode, model, agent, tokens, chat_id, chat_name }, extra) => {
+		async ({ taskId, operation_id, plan, mode, model, agent, tokens, chat_id, chat_name }, extra) => {
+			const startedAt = Date.now();
 			try {
 				// Validate plan schema
 				const parsed = PlanSchema.parse(plan);
@@ -413,6 +470,46 @@ export function registerTaskWriteTools(server: McpServer): void {
 					sessionId: extra.sessionId,
 					requestHeaders: extra.requestInfo?.headers
 				});
+				const operationLedger = getOperationLedger(existingMcp);
+				const payloadHash = stableHash({ plan: parsed, mode: artifactMode });
+				const idempotency = checkIdempotentOperation({
+					ledger: operationLedger,
+					operationId: operation_id,
+					tool: 'update_task_plan',
+					payloadHash
+				});
+				if (idempotency.conflict) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `IDEMPOTENCY_CONFLICT: operation_id "${operation_id}" was previously used for a different payload.`
+							}
+						],
+						isError: true
+					};
+				}
+				if (idempotency.duplicate) {
+					trackToolCall({
+						tool: 'update_task_plan',
+						input: { taskId, operation_id, mode: artifactMode },
+						output: { deduplicated: true },
+						latencyMs: Date.now() - startedAt,
+						duplicateAvoided: true,
+						sessionId: chatContext.sessionId,
+						chatId: chatContext.chatId,
+						chatName: chatContext.chatName,
+						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `↺ Duplicate operation ignored for task \`${currentTask.id.substring(0, 5)}\` (operation_id: ${operation_id}).`
+							}
+						]
+					};
+				}
 
 				// Build execution metadata (Phase 3: auto-inject)
 				const execution = buildExecutionMetadata(planContent, {
@@ -451,7 +548,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 							sessionId: chatContext.sessionId,
 							lastSeenAt: timestamp
 						},
-						analytics
+						analytics,
+						operationLedger: upsertOperationLedger(operationLedger, operation_id, {
+							tool: 'update_task_plan',
+							payloadHash,
+							timestamp
+						})
 					},
 					lastExecution: execution,
 					history: [
@@ -475,7 +577,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					]
 				};
 
-				await patchTaskWithRetryAndVerification(
+				const attemptsUsed = await patchTaskWithRetryAndVerification(
 					api,
 					projectId,
 					currentTask.id,
@@ -494,6 +596,17 @@ export function registerTaskWriteTools(server: McpServer): void {
 						);
 					}
 				);
+				trackToolCall({
+					tool: 'update_task_plan',
+					input: { taskId, operation_id, mode: artifactMode },
+					output: { steps: parsed.steps.length, files: parsed.files_affected.length },
+					latencyMs: Date.now() - startedAt,
+					retries: Math.max(0, attemptsUsed - 1),
+					sessionId: chatContext.sessionId,
+					chatId: chatContext.chatId,
+					chatName: chatContext.chatName,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 
 				return {
 					content: [
@@ -504,6 +617,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 					]
 				};
 			} catch (error) {
+				trackToolCall({
+					tool: 'update_task_plan',
+					input: { taskId, operation_id },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 				if (error instanceof z.ZodError) {
 					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
 					return {
@@ -520,24 +640,26 @@ export function registerTaskWriteTools(server: McpServer): void {
 	// update_task_walkthrough — PATCH with structured walkthrough
 	server.tool(
 		'update_task_walkthrough',
-		'Submit or update an implementation walkthrough for a task. The walkthrough must follow the structured schema with summary, changes, files_modified, decisions, testing, etc. Stores full markdown walkthrough plus structured schema in metadata.',
+		'Use when the user asks to capture what was implemented, validated, and decided after execution.',
 		{
-			taskId: z.string().describe('Task ID (full UUID or truncated prefix)'),
+			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
+			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
 			walkthrough: WalkthroughSchema,
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete walkthrough already exists.'),
-			model: z.string().describe('Model used for this walkthrough'),
-			agent: z.string().describe('Agent/client name'),
+			model: z.string().trim().min(1).max(120).describe('Model used for this walkthrough'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
-			chat_id: z.string().optional().describe('Optional chat/thread identifier'),
-			chat_name: z.string().optional().describe('Optional chat/thread display name')
+			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
+			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
 		},
 		{
 			readOnlyHint: false,
 			destructiveHint: false,
-			idempotentHint: false,
+			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId, walkthrough, mode, model, agent, tokens, chat_id, chat_name }, extra) => {
+		async ({ taskId, operation_id, walkthrough, mode, model, agent, tokens, chat_id, chat_name }, extra) => {
+			const startedAt = Date.now();
 			try {
 				const parsed = WalkthroughSchema.parse(walkthrough);
 				const walkthroughContent = renderWalkthroughMarkdown(parsed);
@@ -560,6 +682,46 @@ export function registerTaskWriteTools(server: McpServer): void {
 					sessionId: extra.sessionId,
 					requestHeaders: extra.requestInfo?.headers
 				});
+				const operationLedger = getOperationLedger(existingMcp);
+				const payloadHash = stableHash({ walkthrough: parsed, mode: artifactMode });
+				const idempotency = checkIdempotentOperation({
+					ledger: operationLedger,
+					operationId: operation_id,
+					tool: 'update_task_walkthrough',
+					payloadHash
+				});
+				if (idempotency.conflict) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `IDEMPOTENCY_CONFLICT: operation_id "${operation_id}" was previously used for a different payload.`
+							}
+						],
+						isError: true
+					};
+				}
+				if (idempotency.duplicate) {
+					trackToolCall({
+						tool: 'update_task_walkthrough',
+						input: { taskId, operation_id, mode: artifactMode },
+						output: { deduplicated: true },
+						latencyMs: Date.now() - startedAt,
+						duplicateAvoided: true,
+						sessionId: chatContext.sessionId,
+						chatId: chatContext.chatId,
+						chatName: chatContext.chatName,
+						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `↺ Duplicate operation ignored for task \`${currentTask.id.substring(0, 5)}\` (operation_id: ${operation_id}).`
+							}
+						]
+					};
+				}
 
 				const execution = buildExecutionMetadata(walkthroughContent, {
 					model,
@@ -596,7 +758,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 							sessionId: chatContext.sessionId,
 							lastSeenAt: timestamp
 						},
-						analytics
+						analytics,
+						operationLedger: upsertOperationLedger(operationLedger, operation_id, {
+							tool: 'update_task_walkthrough',
+							payloadHash,
+							timestamp
+						})
 					},
 					lastExecution: execution,
 					history: [
@@ -620,7 +787,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					]
 				};
 
-				await patchTaskWithRetryAndVerification(
+				const attemptsUsed = await patchTaskWithRetryAndVerification(
 					api,
 					projectId,
 					currentTask.id,
@@ -639,6 +806,17 @@ export function registerTaskWriteTools(server: McpServer): void {
 						);
 					}
 				);
+				trackToolCall({
+					tool: 'update_task_walkthrough',
+					input: { taskId, operation_id, mode: artifactMode },
+					output: { changes: parsed.changes.length, files: parsed.files_modified.length },
+					latencyMs: Date.now() - startedAt,
+					retries: Math.max(0, attemptsUsed - 1),
+					sessionId: chatContext.sessionId,
+					chatId: chatContext.chatId,
+					chatName: chatContext.chatName,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 
 				return {
 					content: [
@@ -649,6 +827,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 					]
 				};
 			} catch (error) {
+				trackToolCall({
+					tool: 'update_task_walkthrough',
+					input: { taskId, operation_id },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 				if (error instanceof z.ZodError) {
 					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
 					return {
@@ -662,42 +847,71 @@ export function registerTaskWriteTools(server: McpServer): void {
 		}
 	);
 
-	// update_task_metadata — PATCH for status/priority changes
+	// set_task_status — atomic write
 	server.tool(
-		'update_task_metadata',
-		'Update task status, priority, or other metadata fields. Use this for lifecycle transitions (e.g. moving a task from "todo" to "in_progress" or marking it "done").',
+		'set_task_status',
+		'Use when the user explicitly asks to move a task to a lifecycle status.',
 		{
-			taskId: z.string().describe('Task ID (full UUID or truncated prefix)'),
-			status: z.string().optional().describe('New status: todo, in_progress, in_review, done, backlog, frozen'),
-			priority: z.string().optional().describe('New priority: low, medium, high, urgent'),
-			model: z.string().describe('Model used (for execution metadata tracking)'),
-			agent: z.string().describe('Agent/client name'),
+			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
+			status: TaskStatusSchema.describe('New status: todo, in_progress, in_review, done, backlog, frozen'),
+			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
+			model: z.string().trim().min(1).max(120).describe('Model used (for execution metadata tracking)'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
-			chat_id: z.string().optional().describe('Optional chat/thread identifier'),
-			chat_name: z.string().optional().describe('Optional chat/thread display name')
+			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
+			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
 		},
 		{
 			readOnlyHint: false,
 			destructiveHint: false,
-			idempotentHint: false,
+			idempotentHint: true,
 			openWorldHint: true
 		},
-			async ({ taskId, status, priority, model, agent, tokens, chat_id, chat_name }, extra) => {
-				try {
-					const config = requireProject();
-					const projectId = config.currentProjectId;
-					if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
-					const api = getApiClient();
-					const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
-					const existingMetadata = (currentTask.implementationMetadata as Record<string, unknown>) || {};
-					const mcp = isRecord(existingMetadata.mcp) ? existingMetadata.mcp : {};
-					const chatContext = resolveChatContext({
-						existingMcp: mcp,
-						chatId: chat_id,
-						chatName: chat_name,
-						sessionId: extra.sessionId,
-						requestHeaders: extra.requestInfo?.headers
+		async ({ taskId, status, operation_id, model, agent, tokens, chat_id, chat_name }, extra) => {
+			const startedAt = Date.now();
+			try {
+				const config = requireProject();
+				const projectId = config.currentProjectId;
+				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
+				const api = getApiClient();
+				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+				const existingMetadata = (currentTask.implementationMetadata as Record<string, unknown>) || {};
+				const mcp = isRecord(existingMetadata.mcp) ? existingMetadata.mcp : {};
+				const chatContext = resolveChatContext({
+					existingMcp: mcp,
+					chatId: chat_id,
+					chatName: chat_name,
+					sessionId: extra.sessionId,
+					requestHeaders: extra.requestInfo?.headers
+				});
+				const operationLedger = getOperationLedger(mcp);
+				const payloadHash = stableHash({ status });
+				const idempotency = checkIdempotentOperation({
+					ledger: operationLedger,
+					operationId: operation_id,
+					tool: 'set_task_status',
+					payloadHash
+				});
+				if (idempotency.conflict) {
+					return {
+						content: [{ type: 'text' as const, text: `IDEMPOTENCY_CONFLICT: operation_id "${operation_id}" was reused with a different payload.` }],
+						isError: true
+					};
+				}
+				if (idempotency.duplicate) {
+					trackToolCall({
+						tool: 'set_task_status',
+						input: { taskId, status, operation_id },
+						output: { deduplicated: true },
+						latencyMs: Date.now() - startedAt,
+						duplicateAvoided: true,
+						sessionId: chatContext.sessionId,
+						chatId: chatContext.chatId,
+						chatName: chatContext.chatName,
+						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 					});
+					return { content: [{ type: 'text' as const, text: `↺ Duplicate operation ignored for \`${currentTask.id.substring(0, 5)}\`.` }] };
+				}
 
 				if (status === 'in_progress') {
 					const hasPlanText = typeof currentTask.plan === 'string' && currentTask.plan.trim().length > 0;
@@ -709,7 +923,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 								{
 									type: 'text' as const,
 									text:
-										'INVALID_STATE: Cannot set task to `in_progress` without a persisted plan after Fenkit retrieval. Submit `update_task_plan` first (`full` if a full artifact exists, otherwise `mini`).'
+										'INVALID_STATE: Cannot set task to `in_progress` without a persisted plan after Fenkit retrieval. Submit `update_task_plan` first.'
 								}
 							],
 							isError: true
@@ -728,7 +942,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 								{
 									type: 'text' as const,
 									text:
-										'INVALID_STATE: Cannot set task to `done` without a persisted walkthrough. Submit `update_task_walkthrough` first (mode `full` if a full artifact exists, otherwise `mini`).'
+										'INVALID_STATE: Cannot set task to `done` without a persisted walkthrough. Submit `update_task_walkthrough` first.'
 								}
 							],
 							isError: true
@@ -736,17 +950,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					}
 				}
 
-				const updatePayload: Record<string, unknown> = {};
-				if (status) updatePayload.status = status;
-				if (priority) updatePayload.priority = priority;
-
-				if (Object.keys(updatePayload).length === 0) {
-					return {
-						content: [{ type: 'text' as const, text: 'INVALID_INPUT: Must provide at least one of: status, priority' }],
-						isError: true
-					};
-				}
-
+				const updatePayload: Record<string, unknown> = { status };
 				const history = (existingMetadata.history as unknown[]) || [];
 				const resolvedTokens = resolveTokens(JSON.stringify(updatePayload), tokens);
 
@@ -771,7 +975,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 					timestamp
 				});
 
-				const changesSnapshot = { ...updatePayload };
 				updatePayload.implementationMetadata = {
 					...existingMetadata,
 					mcp: {
@@ -786,15 +989,20 @@ export function registerTaskWriteTools(server: McpServer): void {
 							sessionId: chatContext.sessionId,
 							lastSeenAt: timestamp
 						},
-						analytics
+						analytics,
+						operationLedger: upsertOperationLedger(operationLedger, operation_id, {
+							tool: 'set_task_status',
+							payloadHash,
+							timestamp
+						})
 					},
 					lastExecution: execution,
 					history: [
 						...history,
 						{
 							...execution,
-							action: 'update_metadata',
-							changes: changesSnapshot,
+							action: 'set_task_status',
+							changes: { status },
 							token_source: resolvedTokens.tokenSource,
 							chat_id: chatContext.chatId,
 							chat_name: chatContext.chatName,
@@ -802,30 +1010,202 @@ export function registerTaskWriteTools(server: McpServer): void {
 							session_id: chatContext.sessionId,
 							duration: execution.durationMs,
 							executed_at: execution.timestamp,
-							cumulativeTokens: analytics.overallTokens,
-							total_tokens: isRecord(analytics.overallTokens) ? analytics.overallTokens.total : undefined,
-							'total tokens': isRecord(analytics.overallTokens) ? analytics.overallTokens.total : undefined,
-							git_branch: isRecord(execution.git) ? execution.git.branch : undefined,
-							git_repo: isRecord(execution.git) ? execution.git.repo : undefined
+							cumulativeTokens: analytics.overallTokens
 						}
 					]
 				};
 
-					await api.patch(`/projects/${projectId}/tasks/${currentTask.id}`, updatePayload);
+				const attemptsUsed = await patchTaskWithRetryAndVerification(api, projectId, currentTask.id, updatePayload, (persistedTask) => {
+					return persistedTask.status === status;
+				});
 
-				const changes = [];
-				if (status) changes.push(`Status → ${status}`);
-				if (priority) changes.push(`Priority → ${priority}`);
+				trackToolCall({
+					tool: 'set_task_status',
+					input: { taskId, status, operation_id },
+					output: { status },
+					latencyMs: Date.now() - startedAt,
+					retries: Math.max(0, attemptsUsed - 1),
+					sessionId: chatContext.sessionId,
+					chatId: chatContext.chatId,
+					chatName: chatContext.chatName,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 
 				return {
-					content: [
+					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` status set to \`${status}\`.` }]
+				};
+			} catch (error) {
+				trackToolCall({
+					tool: 'set_task_status',
+					input: { taskId, status, operation_id },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
+				const err = formatApiError(error);
+				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+			}
+		}
+	);
+
+	// set_task_priority — atomic write
+	server.tool(
+		'set_task_priority',
+		'Use when the user explicitly asks to change urgency or priority of an existing task.',
+		{
+			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
+			priority: TaskPrioritySchema.describe('New priority: low, medium, high, urgent'),
+			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
+			model: z.string().trim().min(1).max(120).describe('Model used (for execution metadata tracking)'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
+			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
+			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
+		},
+		{
+			readOnlyHint: false,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
+		},
+		async ({ taskId, priority, operation_id, model, agent, tokens, chat_id, chat_name }, extra) => {
+			const startedAt = Date.now();
+			try {
+				const config = requireProject();
+				const projectId = config.currentProjectId;
+				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
+				const api = getApiClient();
+				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+				const existingMetadata = (currentTask.implementationMetadata as Record<string, unknown>) || {};
+				const mcp = isRecord(existingMetadata.mcp) ? existingMetadata.mcp : {};
+				const chatContext = resolveChatContext({
+					existingMcp: mcp,
+					chatId: chat_id,
+					chatName: chat_name,
+					sessionId: extra.sessionId,
+					requestHeaders: extra.requestInfo?.headers
+				});
+				const operationLedger = getOperationLedger(mcp);
+				const payloadHash = stableHash({ priority });
+				const idempotency = checkIdempotentOperation({
+					ledger: operationLedger,
+					operationId: operation_id,
+					tool: 'set_task_priority',
+					payloadHash
+				});
+				if (idempotency.conflict) {
+					return {
+						content: [{ type: 'text' as const, text: `IDEMPOTENCY_CONFLICT: operation_id "${operation_id}" was reused with a different payload.` }],
+						isError: true
+					};
+				}
+				if (idempotency.duplicate) {
+					trackToolCall({
+						tool: 'set_task_priority',
+						input: { taskId, priority, operation_id },
+						output: { deduplicated: true },
+						latencyMs: Date.now() - startedAt,
+						duplicateAvoided: true,
+						sessionId: chatContext.sessionId,
+						chatId: chatContext.chatId,
+						chatName: chatContext.chatName,
+						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					});
+					return { content: [{ type: 'text' as const, text: `↺ Duplicate operation ignored for \`${currentTask.id.substring(0, 5)}\`.` }] };
+				}
+
+				const updatePayload: Record<string, unknown> = { priority };
+				const history = (existingMetadata.history as unknown[]) || [];
+				const resolvedTokens = resolveTokens(JSON.stringify(updatePayload), tokens);
+
+				const execution = buildExecutionMetadata(JSON.stringify(updatePayload), {
+					model,
+					agent,
+					lastRetrievedAt: existingMetadata.lastRetrievedAt as string | undefined,
+					sessionId: chatContext.sessionId,
+					chatId: chatContext.chatId,
+					chatName: chatContext.chatName,
+					tokenSource: resolvedTokens.tokenSource,
+					extraTokens: resolvedTokens.tokens
+				});
+				const timestamp = typeof execution.timestamp === 'string' ? execution.timestamp : new Date().toISOString();
+				const analytics = buildAnalyticsState({
+					existingMcp: mcp,
+					tokens: resolvedTokens.tokens,
+					tokenSource: resolvedTokens.tokenSource,
+					chatId: chatContext.chatId,
+					chatName: chatContext.chatName,
+					sessionId: chatContext.sessionId,
+					timestamp
+				});
+
+				updatePayload.implementationMetadata = {
+					...existingMetadata,
+					mcp: {
+						...mcp,
+						planSchema: isRecord(mcp.planSchema) ? mcp.planSchema : null,
+						planArtifactMode: typeof mcp.planArtifactMode === 'string' ? mcp.planArtifactMode : null,
+						walkthroughSchema: isRecord(mcp.walkthroughSchema) ? mcp.walkthroughSchema : null,
+						walkthroughArtifactMode: typeof mcp.walkthroughArtifactMode === 'string' ? mcp.walkthroughArtifactMode : null,
+						chat: {
+							id: chatContext.chatId,
+							name: chatContext.chatName,
+							sessionId: chatContext.sessionId,
+							lastSeenAt: timestamp
+						},
+						analytics,
+						operationLedger: upsertOperationLedger(operationLedger, operation_id, {
+							tool: 'set_task_priority',
+							payloadHash,
+							timestamp
+						})
+					},
+					lastExecution: execution,
+					history: [
+						...history,
 						{
-							type: 'text' as const,
-							text: `✔ Task \`${currentTask.id.substring(0, 5)}\` updated: ${changes.join(', ')}`
+							...execution,
+							action: 'set_task_priority',
+							changes: { priority },
+							token_source: resolvedTokens.tokenSource,
+							chat_id: chatContext.chatId,
+							chat_name: chatContext.chatName,
+							chat_title: chatContext.chatName,
+							session_id: chatContext.sessionId,
+							duration: execution.durationMs,
+							executed_at: execution.timestamp,
+							cumulativeTokens: analytics.overallTokens
 						}
 					]
 				};
+
+				const attemptsUsed = await patchTaskWithRetryAndVerification(api, projectId, currentTask.id, updatePayload, (persistedTask) => {
+					return persistedTask.priority === priority;
+				});
+
+				trackToolCall({
+					tool: 'set_task_priority',
+					input: { taskId, priority, operation_id },
+					output: { priority },
+					latencyMs: Date.now() - startedAt,
+					retries: Math.max(0, attemptsUsed - 1),
+					sessionId: chatContext.sessionId,
+					chatId: chatContext.chatId,
+					chatName: chatContext.chatName,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
+
+				return {
+					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` priority set to \`${priority}\`.` }]
+				};
 			} catch (error) {
+				trackToolCall({
+					tool: 'set_task_priority',
+					input: { taskId, priority, operation_id },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 				const err = formatApiError(error);
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
 			}

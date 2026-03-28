@@ -4,6 +4,8 @@ import { requireProject } from '../config.js';
 import { getApiClient, formatApiError } from '../api.js';
 import { stripPrivate, stripPrivateDeep, truncateDeterministic } from '../utils.js';
 import { resolveTaskByIdentifier, updateTaskLastRetrievedAt, type TaskResponse } from './task-common.js';
+import { TaskIdentifierSchema } from '../schemas.js';
+import { extractPromptFromHeaders, trackToolCall } from '../observability.js';
 
 const STATUS_ICONS: Record<string, string> = {
 	todo: '📋',
@@ -15,7 +17,12 @@ const STATUS_ICONS: Record<string, string> = {
 };
 
 const SectionSchema = z.enum(['plan', 'walkthrough', 'metadata', 'history']);
-const ModeSchema = z.enum(['compact', 'full']);
+const StatusFilterSchema = z
+	.string()
+	.trim()
+	.min(1)
+	.max(120)
+	.regex(/^[a-z_,]+$/i, 'Status filter must be comma-separated lowercase values');
 
 const DEFAULT_HISTORY_LIMIT = 3;
 const MAX_HISTORY_LIMIT = 20;
@@ -38,6 +45,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stripAndTruncate(content: string, maxChars: number): string {
 	return truncateDeterministic(stripPrivate(content), maxChars);
+}
+
+async function fetchTasksByStatus(projectId: string, statusFilter: string): Promise<TaskResponse[]> {
+	const api = getApiClient();
+	const params = new URLSearchParams();
+	params.set('status', statusFilter);
+	const { data } = await api.get<TaskResponse[]>(`/projects/${projectId}/tasks?${params.toString()}`);
+	return data;
 }
 
 function compactExecution(execution: unknown): Record<string, unknown> | null {
@@ -275,10 +290,9 @@ function renderTaskSection(
 export function registerTaskReadTools(server: McpServer): void {
 	server.tool(
 		'list_tasks',
-		'List tasks in the active project. Returns task titles, IDs, status, and priority. Use status filter to narrow results. Default shows todo + in_progress tasks.',
+		'Use when the user asks to see tasks in the active project, optionally filtered by status.',
 		{
-			status: z
-				.string()
+			status: StatusFilterSchema
 				.optional()
 				.describe(
 					'Comma-separated status filter (e.g. "todo,in_progress"). Default: "todo,in_progress,in_review". Options: todo, in_progress, in_review, done, backlog, frozen'
@@ -290,19 +304,14 @@ export function registerTaskReadTools(server: McpServer): void {
 				idempotentHint: true,
 				openWorldHint: true
 			},
-			async ({ status }) => {
+			async ({ status }, extra) => {
+			const startedAt = Date.now();
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
-				const api = getApiClient();
-				const params = new URLSearchParams();
 				const statusFilter = status || 'todo,in_progress,in_review';
-				params.set('status', statusFilter);
-
-				const { data } = await api.get<TaskResponse[]>(
-					`/projects/${projectId}/tasks?${params.toString()}`
-				);
+				const data = await fetchTasksByStatus(projectId, statusFilter);
 
 				if (data.length === 0) {
 					return {
@@ -335,8 +344,25 @@ export function registerTaskReadTools(server: McpServer): void {
 					}
 				}
 
-				return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+				const response = { content: [{ type: 'text' as const, text: lines.join('\n') }] };
+				trackToolCall({
+					tool: 'list_tasks',
+					input: { status: statusFilter },
+					output: { count: data.length },
+					latencyMs: Date.now() - startedAt,
+					sessionId: extra.sessionId,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
+				return response;
 			} catch (error) {
+				trackToolCall({
+					tool: 'list_tasks',
+					input: { status },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					sessionId: extra.sessionId,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 				const err = formatApiError(error);
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
 			}
@@ -345,9 +371,9 @@ export function registerTaskReadTools(server: McpServer): void {
 
 	server.tool(
 		'search_tasks',
-		'Search tasks by name or description in the active project. Returns matching tasks with their IDs and status.',
+		'Use when the user provides free-text intent and you need matching tasks by title or description.',
 		{
-			query: z.string().describe('Search query to match against task titles and descriptions')
+			query: z.string().trim().min(2).max(120).describe('Search query to match against task titles and descriptions')
 		},
 		{
 			readOnlyHint: true,
@@ -355,7 +381,8 @@ export function registerTaskReadTools(server: McpServer): void {
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ query }) => {
+		async ({ query }, extra) => {
+			const startedAt = Date.now();
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -377,7 +404,7 @@ export function registerTaskReadTools(server: McpServer): void {
 						`- **${t.title}** (\`${t.id.substring(0, 5)}\`) · ${STATUS_ICONS[t.status] || ''} ${t.status} · ${t.priority}`
 				);
 
-				return {
+				const response = {
 					content: [
 						{
 							type: 'text' as const,
@@ -385,7 +412,24 @@ export function registerTaskReadTools(server: McpServer): void {
 						}
 					]
 				};
+				trackToolCall({
+					tool: 'search_tasks',
+					input: { query },
+					output: { count: data.length },
+					latencyMs: Date.now() - startedAt,
+					sessionId: extra.sessionId,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
+				return response;
 			} catch (error) {
+				trackToolCall({
+					tool: 'search_tasks',
+					input: { query },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					sessionId: extra.sessionId,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
 				const err = formatApiError(error);
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
 			}
@@ -394,9 +438,9 @@ export function registerTaskReadTools(server: McpServer): void {
 
 	server.tool(
 		'get_task_context_compact',
-		'Primary retrieval tool for LLM agents. Returns compact task context optimized for tokens. Use this first, then call `get_task_context_full` or `get_task_section` only if needed.',
+		'Use when the user asks to work on a task and you need a token-efficient context snapshot first.',
 		{
-			taskId: z.string().describe('Task ID (full UUID or truncated prefix like "22b50")'),
+			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix like "22b50")'),
 			historyLimit: z
 				.number()
 				.int()
@@ -413,7 +457,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					.describe('Max chars for long text fields (default: 3500)')
 		},
 		{
-			readOnlyHint: false,
+			readOnlyHint: true,
 			destructiveHint: false,
 			idempotentHint: true,
 			openWorldHint: true
@@ -444,12 +488,12 @@ export function registerTaskReadTools(server: McpServer): void {
 
 	server.tool(
 		'get_task_context_full',
-		'Returns complete task context (description, full plan/walkthrough, full metadata). Use only when compact context is insufficient.',
+		'Use when compact context is not enough and the user needs full task details including full plan/walkthrough.',
 		{
-			taskId: z.string().describe('Task ID (full UUID or truncated prefix like "22b50")')
+			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix like "22b50")')
 		},
 		{
-			readOnlyHint: false,
+			readOnlyHint: true,
 			destructiveHint: false,
 			idempotentHint: true,
 			openWorldHint: true
@@ -475,9 +519,9 @@ export function registerTaskReadTools(server: McpServer): void {
 
 	server.tool(
 		'get_task_section',
-		'Returns only one section of a task (`plan`, `walkthrough`, `metadata`, or `history`) with output caps. Use after compact retrieval to reduce token usage.',
+		'Use when the user only needs one part of the task context (plan, walkthrough, metadata, or history).',
 		{
-			taskId: z.string().describe('Task ID (full UUID or truncated prefix like "22b50")'),
+			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix like "22b50")'),
 			section: SectionSchema.describe('Section to retrieve: plan | walkthrough | metadata | history'),
 			historyLimit: z
 				.number()
@@ -495,7 +539,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					.describe('Max chars for section payload (default: 3500)')
 		},
 		{
-			readOnlyHint: false,
+			readOnlyHint: true,
 			destructiveHint: false,
 			idempotentHint: true,
 			openWorldHint: true
@@ -524,61 +568,55 @@ export function registerTaskReadTools(server: McpServer): void {
 		}
 	);
 
-	// Backward-compatible alias (deprecated)
 	server.tool(
-		'get_full_task',
-		'[Deprecated alias] Use `get_task_context_compact` first. This alias supports mode=compact|full and optional section.',
+		'get_active_tasks',
+		'Use when the user asks for active work items (todo, in_progress, in_review) without custom filtering.',
+		{},
 		{
-			taskId: z.string().describe('Task ID (full UUID or truncated prefix like "22b50")'),
-			mode: ModeSchema.optional().describe('compact (default) or full'),
-			section: SectionSchema.optional().describe('Optional section override: plan|walkthrough|metadata|history'),
-			historyLimit: z
-				.number()
-				.int()
-				.min(1)
-				.max(MAX_HISTORY_LIMIT)
-				.optional()
-				.describe('History entries cap (default: 3)'),
-			maxChars: z
-				.number()
-				.int()
-				.min(500)
-				.max(MAX_ALLOWED_CHARS)
-				.optional()
-					.describe('Text cap for compact/section output')
-		},
-		{
-			readOnlyHint: false,
+			readOnlyHint: true,
 			destructiveHint: false,
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId, mode, section, historyLimit, maxChars }) => {
+		async () => {
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
-				const api = getApiClient();
-				const task = await resolveTaskByIdentifier(api, projectId, taskId);
-				await updateTaskLastRetrievedAt(api, projectId, task);
-
-				const options: CompactOptions = {
-					historyLimit: clampNumber(historyLimit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
-					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
-				};
-
-				let content: string;
-				if (section) {
-					content = renderTaskSection(task, section, options);
-				} else if (mode === 'full') {
-					content = renderFullContext(task);
-				} else {
-					content = renderCompactContext(task, options);
+				const data = await fetchTasksByStatus(projectId, 'todo,in_progress,in_review');
+				if (data.length === 0) {
+					return { content: [{ type: 'text' as const, text: 'No active tasks found.' }] };
 				}
+				const lines = data.map((t) => `- **${t.title}** (\`${t.id.substring(0, 5)}\`) · ${t.status} · ${t.priority}`);
+				return { content: [{ type: 'text' as const, text: `## Active Tasks\n\n${lines.join('\n')}` }] };
+			} catch (error) {
+				const err = formatApiError(error);
+				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+			}
+		}
+	);
 
-				const notice =
-					'> Deprecated: prefer `get_task_context_compact`, `get_task_context_full`, or `get_task_section`.\n\n';
-				return { content: [{ type: 'text' as const, text: `${notice}${content}` }] };
+	server.tool(
+		'get_tasks_in_review',
+		'Use when the user asks specifically for tasks waiting in review.',
+		{},
+		{
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
+		},
+		async () => {
+			try {
+				const config = requireProject();
+				const projectId = config.currentProjectId;
+				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
+				const data = await fetchTasksByStatus(projectId, 'in_review');
+				if (data.length === 0) {
+					return { content: [{ type: 'text' as const, text: 'No in_review tasks found.' }] };
+				}
+				const lines = data.map((t) => `- **${t.title}** (\`${t.id.substring(0, 5)}\`) · ${t.priority}`);
+				return { content: [{ type: 'text' as const, text: `## Tasks in Review\n\n${lines.join('\n')}` }] };
 			} catch (error) {
 				const err = formatApiError(error);
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };

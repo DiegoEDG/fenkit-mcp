@@ -7,8 +7,10 @@ import { registerProjectTools } from './tools/projects.js';
 import { registerTaskReadTools } from './tools/task-read.js';
 import { registerTaskWriteTools } from './tools/task-write.js';
 import { registerSetupTools, setupHandlers, CLIENTS, ClientType } from './tools/setup.js';
+import { registerContextResources } from './resources/contextual.js';
 
 type ServerMode = 'all' | 'runtime' | 'admin';
+type ToolsetMode = 'full' | 'read' | 'write';
 
 function parseMode(args: string[]): { mode: ServerMode; args: string[] } {
 	const modeArg = args.find((arg) => arg.startsWith('--mode='));
@@ -18,15 +20,27 @@ function parseMode(args: string[]): { mode: ServerMode; args: string[] } {
 	return { mode, args: args.filter((arg) => arg !== modeArg) };
 }
 
+function parseToolset(args: string[]): { toolset: ToolsetMode; args: string[] } {
+	const envToolset = process.env.FENKIT_TOOLSET;
+	const fromEnv: ToolsetMode = envToolset === 'read' || envToolset === 'write' ? envToolset : 'full';
+	const toolsetArg = args.find((arg) => arg.startsWith('--toolset='));
+	if (!toolsetArg) return { toolset: fromEnv, args };
+	const raw = toolsetArg.slice('--toolset='.length);
+	const toolset: ToolsetMode = raw === 'read' || raw === 'write' ? raw : 'full';
+	return { toolset, args: args.filter((arg) => arg !== toolsetArg) };
+}
+
 // Start the server with stdio transport
 async function main(): Promise<void> {
 	const parsed = parseMode(process.argv.slice(2));
-	const args = parsed.args;
+	const parsedToolset = parseToolset(parsed.args);
+	const args = parsedToolset.args;
 	const mode = parsed.mode;
+	const toolset = parsedToolset.toolset;
 
 	const server = new McpServer({
 		name: mode === 'all' ? 'fenkit-mcp' : `fenkit-mcp-${mode}`,
-		version: '1.0.0',
+		version: '2.0.0',
 		description:
 			'Fenkit MCP Server — LLM-native task coordination layer for AI agents. Discover, plan, execute, and track tasks in the Fenkit platform.'
 	});
@@ -62,15 +76,25 @@ async function main(): Promise<void> {
 	} else if (mode === 'runtime') {
 		registerAuthTools(server, { includeLogin: false, includeStatus: true });
 		registerProjectTools(server);
-		registerTaskReadTools(server);
-		registerTaskWriteTools(server);
+		if (toolset !== 'write') {
+			registerTaskReadTools(server);
+		}
+		if (toolset !== 'read') {
+			registerTaskWriteTools(server);
+		}
+		registerContextResources(server);
 	} else {
 		// Backward-compatible single-server mode
 		registerAuthTools(server);
 		registerProjectTools(server);
-		registerTaskReadTools(server);
-		registerTaskWriteTools(server);
+		if (toolset !== 'write') {
+			registerTaskReadTools(server);
+		}
+		if (toolset !== 'read') {
+			registerTaskWriteTools(server);
+		}
 		registerSetupTools(server);
+		registerContextResources(server);
 	}
 
 	// Default: Start MCP Server

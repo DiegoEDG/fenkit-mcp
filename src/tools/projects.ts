@@ -17,7 +17,7 @@ export function registerProjectTools(server: McpServer): void {
   // list_projects — GET /projects
   server.tool(
     'list_projects',
-    'List all accessible projects in your Fenkit workspace. Returns project IDs, names, and descriptions. Use this to discover projects before selecting one.',
+    'Use when the user asks which Fenkit projects are available before choosing one.',
     {},
     {
       readOnlyHint: true,
@@ -63,7 +63,7 @@ export function registerProjectTools(server: McpServer): void {
   // get_active_project — reads config
   server.tool(
     'get_active_project',
-    'Get the currently active project. Returns the project name and ID from local config.',
+    'Use when the user asks which project is currently active for subsequent task operations.',
     {},
     {
       readOnlyHint: true,
@@ -97,9 +97,9 @@ export function registerProjectTools(server: McpServer): void {
   // select_project — updates currentProjectId in config
   server.tool(
     'select_project',
-    'Set the active project by ID. All subsequent task operations will use this project. Call `list_projects` first to discover available project IDs.',
+    'Use when the user explicitly asks to switch task context to a different project.',
     {
-      projectId: z.string().describe('Project ID to select as active'),
+      projectId: z.string().trim().min(4).max(64).describe('Project ID to select as active'),
     },
     {
       readOnlyHint: false,

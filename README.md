@@ -84,7 +84,7 @@ Nuestras herramientas están diseñadas para que el agente tenga autonomía tota
 - 🔐 **Auth:** `login`, `get_status` - Seguridad robusta en cada interacción.
 - 📂 **Proyectos:** `list_projects`, `select_project` - Navegación inteligente.
 - 📝 **Tareas:** `list_tasks`, `get_task_context_compact` - Foco en lo que importa.
-- 🚀 **Escritura:** `update_task_plan`, `update_task_walkthrough` - Documentación como subproducto.
+- 🚀 **Escritura:** `update_task_plan`, `update_task_walkthrough`, `set_task_status`, `set_task_priority` - Documentación y lifecycle determinista.
 
 ---
 
