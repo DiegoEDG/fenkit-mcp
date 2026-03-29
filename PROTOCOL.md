@@ -5,8 +5,9 @@ This protocol defines how AI agents should coordinate work using Fenkit MCP so t
 ## 🧠 Core Principles
 
 1. **AI-Native First**: Task operations are structured for autonomous agents.
-2. **Continuous Synchronization**: Plans, status, and walkthroughs are updated during execution.
-3. **Traceable Delivery**: Metadata history captures model/agent execution context.
+2. **Strict Read/Write Split**: Use read-only tools/resources for discovery and context; use write tools only for state changes.
+3. **Continuous Synchronization**: Plans, status, and walkthroughs are updated during execution.
+4. **Traceable Delivery**: Metadata history captures model/agent execution context.
 
 ---
 
@@ -31,6 +32,7 @@ Before coding, submit a structured plan:
 ```text
 update_task_plan(taskId, operation_id, plan, model, agent)
 ```
+Use `execution_mode="preview"` first (when confirmation is enabled), then execute with `confirmation_token`.
 
 ### 4) Execution
 When starting implementation:
@@ -39,6 +41,7 @@ set_task_status(taskId, status, operation_id, model, agent)
 set_task_priority(taskId, priority, operation_id, model, agent)
 ```
 Use `status="in_progress"` when work begins.
+For sensitive writes (`select_project`, status/priority changes, plan/walkthrough updates), prefer preview → execute flow.
 
 ### 5) Completion
 After verification:
@@ -70,3 +73,9 @@ During `setup` / `setup_client`, protocol guidance is injected into:
 - Codex (`~/.codex/fenkit-instructions.md`)
 - OpenCode (`~/.config/opencode/opencode.json`)
 - Antigravity (`~/.gemini/GEMINI.md`)
+
+## 🔐 Runtime Profiles
+
+- `--mode=read-runtime`: read-only discovery + context tools/resources/prompts.
+- `--mode=write-runtime`: mutating task tools.
+- `--mode=admin`: authentication/setup tools.

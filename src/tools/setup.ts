@@ -21,13 +21,14 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 - After a long pause or context reset, call \`get_status\` to ensure you still have the correct task context.
 
 ### 2. Task Lifecycle
-- **Discovery**: Use \`list_tasks\` or \`search_tasks\` to find your assignment.
+- **Discovery (read-only)**: Use \`list_tasks\`, \`search_tasks\`, \`get_task_context_compact\`, and \`get_task_section\` for context.
 - **Loading**: Start with \`get_task_context_compact(taskId)\`. Use \`get_task_context_full(taskId)\` or \`get_task_section(...)\` only when needed.
-- **Planning**: Before coding, persist a plan using \`update_task_plan(taskId, operation_id, plan, mode, model, agent)\`.
+- **Planning (write)**: Before coding, persist a plan using \`update_task_plan(taskId, operation_id, plan, mode, model, agent)\`.
   - After the user approves implementation and after the task was loaded with Fenkit retrieval tools, you MUST persist plan before the first execution update.
   - If you already produced a detailed plan (e.g. plan mode), push it with \`mode: "full"\`.
   - If no full plan exists, push a short fallback plan with \`mode: "mini"\`.
-- **Execution**: Set status to \`in_progress\` using \`set_task_status(taskId, status, operation_id, model, agent)\`.
+- **Confirmation for sensitive writes**: Use preview → execute flow for \`select_project\`, \`set_task_status\`, \`set_task_priority\`, \`update_task_plan\`, and \`update_task_walkthrough\`.
+- **Execution**: Set status to \`in_progress\` using \`set_task_status(taskId, status, operation_id, model, agent)\` after confirmation.
 - **Completion**: When work is finished, persist a walkthrough with \`update_task_walkthrough(taskId, operation_id, walkthrough, mode, model, agent)\`.
   - This automatically moves the task to \`in_review\`.
   - If you already produced a detailed walkthrough, push it with \`mode: "full"\`.
@@ -202,7 +203,7 @@ function upsertTomlServerBlock(tomlContent: string, name: string, block: string)
   return `${trimmed}\n\n${block}\n`;
 }
 
-type FenkitMode = 'runtime' | 'admin';
+type FenkitMode = 'read-runtime' | 'write-runtime' | 'admin';
 
 function fenKitMcpEntry(serverPath: string, mode: FenkitMode) {
   return {
@@ -212,7 +213,8 @@ function fenKitMcpEntry(serverPath: string, mode: FenkitMode) {
 }
 
 function applyDualFenkitServers(container: Record<string, unknown>, serverPath: string): Record<string, unknown> {
-  container['fenkit'] = fenKitMcpEntry(serverPath, 'runtime');
+  container['fenkit_read'] = fenKitMcpEntry(serverPath, 'read-runtime');
+  container['fenkit_write'] = fenKitMcpEntry(serverPath, 'write-runtime');
   container['fenkit_admin'] = fenKitMcpEntry(serverPath, 'admin');
   return container;
 }
@@ -314,9 +316,11 @@ export function setupCodex(serverPath: string): { path: string; action: string }
     tomlContent = header + tomlContent;
   }
 
-  const runtimeBlock = `[mcp_servers.fenkit]\ncommand = "node"\nargs = ["${serverPath}", "--mode=runtime"]`;
+  const readBlock = `[mcp_servers.fenkit_read]\ncommand = "node"\nargs = ["${serverPath}", "--mode=read-runtime"]`;
+  const writeBlock = `[mcp_servers.fenkit_write]\ncommand = "node"\nargs = ["${serverPath}", "--mode=write-runtime"]`;
   const adminBlock = `[mcp_servers.fenkit_admin]\ncommand = "node"\nargs = ["${serverPath}", "--mode=admin"]`;
-  tomlContent = upsertTomlServerBlock(tomlContent, 'fenkit', runtimeBlock);
+  tomlContent = upsertTomlServerBlock(tomlContent, 'fenkit_read', readBlock);
+  tomlContent = upsertTomlServerBlock(tomlContent, 'fenkit_write', writeBlock);
   tomlContent = upsertTomlServerBlock(tomlContent, 'fenkit_admin', adminBlock);
 
   fs.writeFileSync(configPath, tomlContent, 'utf-8');
@@ -329,10 +333,15 @@ export function setupOpenCode(serverPath: string): { path: string; action: strin
 
   const config = readJsonOrDefault<Record<string, unknown>>(configPath, {});
   const mcp = (config['mcp'] as Record<string, unknown>) ?? {};
-  mcp['fenkit'] = {
+  mcp['fenkit_read'] = {
     type: 'local',
     enabled: true,
-    command: ['node', serverPath, '--mode=runtime'],
+    command: ['node', serverPath, '--mode=read-runtime'],
+  };
+  mcp['fenkit_write'] = {
+    type: 'local',
+    enabled: true,
+    command: ['node', serverPath, '--mode=write-runtime'],
   };
   mcp['fenkit_admin'] = {
     type: 'local',
@@ -342,7 +351,10 @@ export function setupOpenCode(serverPath: string): { path: string; action: strin
   config['mcp'] = mcp;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
-  return { path: configPath, action: 'Updated opencode.json (mcp.fenkit + mcp.fenkit_admin)' };
+  return {
+    path: configPath,
+    action: 'Updated opencode.json (mcp.fenkit_read + mcp.fenkit_write + mcp.fenkit_admin)'
+  };
 }
 
 export function setupClaudeCode(serverPath: string): { path: string; action: string } {
@@ -419,7 +431,8 @@ export function registerSetupTools(server: McpServer): void {
           ``,
           `**Action**: ${result.action}`,
           `**Config path**: \`${result.path}\``,
-          `**Runtime server**: \`node ${serverPath} --mode=runtime\``,
+          `**Read runtime**: \`node ${serverPath} --mode=read-runtime\``,
+          `**Write runtime**: \`node ${serverPath} --mode=write-runtime\``,
           `**Admin server**: \`node ${serverPath} --mode=admin\``,
           ``,
           `**Next steps**:`,
@@ -450,7 +463,8 @@ export function registerSetupTools(server: McpServer): void {
     },
     async ({ client }) => {
       const serverPath = getServerPath();
-      const runtimeEntry = `{\n  "command": "node",\n  "args": ["${serverPath}", "--mode=runtime"]\n}`;
+      const readEntry = `{\n  "command": "node",\n  "args": ["${serverPath}", "--mode=read-runtime"]\n}`;
+      const writeEntry = `{\n  "command": "node",\n  "args": ["${serverPath}", "--mode=write-runtime"]\n}`;
       const adminEntry = `{\n  "command": "node",\n  "args": ["${serverPath}", "--mode=admin"]\n}`;
 
       const instructions: Record<string, string> = {
@@ -459,7 +473,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_read": ' + readEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_write": ' + writeEntry.replace(/\n/g, '\n    ') + ',',
           '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
@@ -471,7 +486,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_read": ' + readEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_write": ' + writeEntry.replace(/\n/g, '\n    ') + ',',
           '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
@@ -492,7 +508,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_read": ' + readEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_write": ' + writeEntry.replace(/\n/g, '\n    ') + ',',
           '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
@@ -509,7 +526,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_read": ' + readEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_write": ' + writeEntry.replace(/\n/g, '\n    ') + ',',
           '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',
@@ -526,9 +544,13 @@ export function registerSetupTools(server: McpServer): void {
           '```toml',
           `model_instructions_file = "${codexInstructionsPath()}"`,
           '',
-          '[mcp_servers.fenkit]',
+          '[mcp_servers.fenkit_read]',
           'command = "node"',
-          `args = ["${serverPath}", "--mode=runtime"]`,
+          `args = ["${serverPath}", "--mode=read-runtime"]`,
+          '',
+          '[mcp_servers.fenkit_write]',
+          'command = "node"',
+          `args = ["${serverPath}", "--mode=write-runtime"]`,
           '',
           '[mcp_servers.fenkit_admin]',
           'command = "node"',
@@ -547,10 +569,15 @@ export function registerSetupTools(server: McpServer): void {
           '{',
           '  "$schema": "https://opencode.ai/config.json",',
           '  "mcp": {',
-          '    "fenkit": {',
+          '    "fenkit_read": {',
           '      "type": "local",',
           '      "enabled": true,',
-          '      "command": ["node", "' + serverPath + '", "--mode=runtime"]',
+          '      "command": ["node", "' + serverPath + '", "--mode=read-runtime"]',
+          '    },',
+          '    "fenkit_write": {',
+          '      "type": "local",',
+          '      "enabled": true,',
+          '      "command": ["node", "' + serverPath + '", "--mode=write-runtime"]',
           '    },',
           '    "fenkit_admin": {',
           '      "type": "local",',
@@ -566,7 +593,8 @@ export function registerSetupTools(server: McpServer): void {
           '```json',
           '{',
           '  "mcpServers": {',
-          '    "fenkit": ' + runtimeEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_read": ' + readEntry.replace(/\n/g, '\n    ') + ',',
+          '    "fenkit_write": ' + writeEntry.replace(/\n/g, '\n    ') + ',',
           '    "fenkit_admin": ' + adminEntry.replace(/\n/g, '\n    '),
           '  }',
           '}',

@@ -1,22 +1,18 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireProject, saveConfig } from '../config.js';
+import { requireProject } from '../config.js';
 import { getApiClient, formatApiError } from '../api.js';
-import { stripPrivate, stripPrivateDeep, truncateDeterministic } from '../utils.js';
 import { resolveTaskByIdentifier, type TaskResponse } from './task-common.js';
 import { TaskIdentifierSchema } from '../schemas.js';
 import { extractPromptFromHeaders, trackToolCall } from '../observability.js';
-
-const STATUS_ICONS: Record<string, string> = {
-	todo: '📋',
-	in_progress: '🏗️',
-	in_review: '🔍',
-	done: '✅',
-	backlog: '📥',
-	frozen: '❄️'
-};
-
-const SectionSchema = z.enum(['plan', 'walkthrough', 'mcp_context']);
+import { clampMaxChars, MAX_ALLOWED_CHARS } from '../compact-context.js';
+import {
+	renderCompactContext,
+	renderFullContext,
+	renderTaskSection,
+	STATUS_ICONS,
+	SectionSchema
+} from '../task-context-render.js';
 const StatusFilterSchema = z
 	.string()
 	.trim()
@@ -24,8 +20,6 @@ const StatusFilterSchema = z
 	.max(120)
 	.regex(/^[a-z_,]+$/i, 'Status filter must be comma-separated lowercase values');
 
-const DEFAULT_MAX_CHARS = 3500;
-const MAX_ALLOWED_CHARS = 12000;
 const CHAT_ID_HEADER_KEYS = ['x-chat-id', 'x-thread-id', 'x-codex-chat-id', 'x-codex-thread-id'] as const;
 
 interface ResolveChatTaskBindingResponse {
@@ -38,21 +32,8 @@ interface ResolveChatTaskBindingResponse {
 	last_seen_at?: string;
 }
 
-interface CompactOptions {
-	maxChars: number;
-}
-
-function clampNumber(value: number | undefined, fallback: number, min: number, max: number): number {
-	if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
-	return Math.min(max, Math.max(min, Math.floor(value)));
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function stripAndTruncate(content: string, maxChars: number): string {
-	return truncateDeterministic(stripPrivate(content), maxChars);
 }
 
 function getHeaderString(headers: unknown, keys: readonly string[]): string | undefined {
@@ -106,133 +87,6 @@ async function fetchTasksByStatus(projectId: string, statusFilter: string): Prom
 	params.set('status', statusFilter);
 	const { data } = await api.get<TaskResponse[]>(`/projects/${projectId}/tasks?${params.toString()}`);
 	return data;
-}
-
-function renderCompactContext(task: TaskResponse, options: CompactOptions): string {
-	const context = isRecord(task.mcpContext) ? task.mcpContext : null;
-
-	const sections: string[] = [];
-	sections.push(`# ${task.title}`);
-	sections.push('');
-	sections.push(
-		`**ID**: \`${task.id}\` · **Status**: ${STATUS_ICONS[task.status] || ''} ${task.status} · **Priority**: ${task.priority}`
-	);
-	if (task.tags?.length) {
-		sections.push(`**Tags**: ${task.tags.map((t) => t.name).join(', ')}`);
-	}
-	sections.push('');
-
-	sections.push('## Description (compact)');
-	sections.push(task.description ? stripAndTruncate(task.description, options.maxChars) : '_(no description)_');
-	sections.push('');
-
-	if (task.plan) {
-		sections.push('## Plan Summary');
-		sections.push(stripAndTruncate(task.plan, options.maxChars));
-		sections.push('');
-	}
-
-	if (task.walkthrough) {
-		sections.push('## Walkthrough Summary');
-		sections.push(stripAndTruncate(task.walkthrough, options.maxChars));
-		sections.push('');
-	}
-
-	if (context) {
-		sections.push('## Latest Chat Context');
-		sections.push(`- Actor: ${String(context.actor || 'n/a')}`);
-		sections.push(`- Tool: ${String(context.tool || 'n/a')}`);
-		sections.push(`- Chat ID: ${String(context.last_chat_id || 'n/a')}`);
-		sections.push(`- Chat name: ${String(context.last_chat_name || 'n/a')}`);
-		sections.push(`- Last seen: ${String(context.last_seen_at || 'n/a')}`);
-		sections.push('');
-	}
-
-	sections.push(
-		'> Compact mode intentionally omits full sections. Call `get_task_context_full` or `get_task_section` if needed.'
-	);
-
-	return sections.join('\n');
-}
-
-function renderFullContext(task: TaskResponse): string {
-	const sections: string[] = [];
-	sections.push(`# ${task.title}`);
-	sections.push('');
-	sections.push(
-		`**ID**: \`${task.id}\` · **Status**: ${STATUS_ICONS[task.status] || ''} ${task.status} · **Priority**: ${task.priority}`
-	);
-
-	if (task.tags?.length) {
-		sections.push(`**Tags**: ${task.tags.map((t) => t.name).join(', ')}`);
-	}
-	sections.push('');
-
-	sections.push('## Description');
-	sections.push(task.description ? stripPrivate(task.description) : '_(no description)_');
-	sections.push('');
-
-	if (task.plan) {
-		sections.push('## Plan');
-		sections.push(stripPrivate(task.plan));
-		sections.push('');
-	}
-
-	if (task.walkthrough) {
-		sections.push('## Walkthrough');
-		sections.push(stripPrivate(task.walkthrough));
-		sections.push('');
-	}
-
-	const context = stripPrivateDeep(task.mcpContext || {});
-	if (isRecord(context) && Object.keys(context).length > 0) {
-		sections.push('## MCP Context');
-		sections.push('```json');
-		sections.push(JSON.stringify(context, null, 2));
-		sections.push('```');
-		sections.push('');
-	}
-
-	return sections.join('\n');
-}
-
-function renderTaskSection(
-	task: TaskResponse,
-	section: z.infer<typeof SectionSchema>,
-	options: CompactOptions
-): string {
-	const context = stripPrivateDeep(task.mcpContext || {});
-	const lines: string[] = [];
-	lines.push(`# ${task.title}`);
-	lines.push('');
-	lines.push(`**ID**: \`${task.id}\``);
-	lines.push('');
-
-	if (section === 'plan') {
-		lines.push('## Plan');
-		const content = task.plan || '';
-		lines.push(content ? stripAndTruncate(content, options.maxChars) : '_(no plan)_');
-		return lines.join('\n');
-	}
-
-	if (section === 'walkthrough') {
-		lines.push('## Walkthrough');
-		const content = task.walkthrough || '';
-		lines.push(content ? stripAndTruncate(content, options.maxChars) : '_(no walkthrough)_');
-		return lines.join('\n');
-	}
-
-	// mcp_context section
-	lines.push('## MCP Context');
-	lines.push('```json');
-	lines.push(
-		truncateDeterministic(
-			JSON.stringify(isRecord(context) ? context : {}, null, 2),
-			options.maxChars
-		)
-	);
-	lines.push('```');
-	return lines.join('\n');
 }
 
 /**
@@ -556,11 +410,11 @@ export function registerTaskReadTools(server: McpServer): void {
 				});
 
 				const options: CompactOptions = {
-					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
+					maxChars: clampMaxChars(maxChars)
 				};
 
 				return {
-					content: [{ type: 'text' as const, text: renderCompactContext(task, options) }]
+					content: [{ type: 'text' as const, text: renderCompactContext(task, options.maxChars) }]
 				};
 			} catch (error) {
 				const err = formatApiError(error);
@@ -639,12 +493,10 @@ export function registerTaskReadTools(server: McpServer): void {
 					headers: extra.requestInfo?.headers
 				});
 
-				const options: CompactOptions = {
-					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
-				};
+				const options = { maxChars: clampMaxChars(maxChars) };
 
 				return {
-					content: [{ type: 'text' as const, text: renderTaskSection(task, section, options) }]
+					content: [{ type: 'text' as const, text: renderTaskSection(task, section, options.maxChars) }]
 				};
 			} catch (error) {
 				const err = formatApiError(error);

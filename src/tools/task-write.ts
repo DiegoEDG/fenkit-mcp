@@ -15,6 +15,11 @@ import {
 } from '../schemas.js';
 import { resolveTaskByIdentifier } from './task-common.js';
 import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observability.js';
+import {
+	consumeConfirmationToken,
+	isSensitiveConfirmationEnabled,
+	issueConfirmationToken
+} from '../confirmation.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
 	const lines: string[] = [];
@@ -128,6 +133,12 @@ interface ResolvedChatContext {
 	sessionId: string;
 }
 
+interface ConfirmationMeta {
+	tokenId: string;
+	confirmedAt: string;
+	requestedAt: string;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null;
 }
@@ -205,6 +216,17 @@ function resolveTokens(
 	};
 }
 
+function resolveExecutionMode(mode: 'preview' | 'execute' | undefined): 'preview' | 'execute' {
+	if (mode) return mode;
+	return isSensitiveConfirmationEnabled() ? 'preview' : 'execute';
+}
+
+function resolveIdempotencyErrorCode(error: unknown): 'idempotency_conflict' | 'other' {
+	const message = error instanceof Error ? error.message : String(error);
+	if (message.includes('IDEMPOTENCY_CONFLICT')) return 'idempotency_conflict';
+	return 'other';
+}
+
 async function syncChatTaskBindingHeartbeatFromWrite(options: {
 	projectId: string;
 	taskId: string;
@@ -267,6 +289,7 @@ function buildMcpPayload(options: {
 	latencyMs?: number;
 	changedFields: string[];
 	requestHeaders?: unknown;
+	confirmation?: ConfirmationMeta;
 }): { mcpContext: Record<string, unknown>; mcpEvent: Record<string, unknown> } {
 	const requestId = pickHeaderValue(options.requestHeaders, ['x-request-id']);
 	return {
@@ -288,7 +311,10 @@ function buildMcpPayload(options: {
 			tokens: options.tokens,
 			latency_ms: options.latencyMs ?? 0,
 			changed_fields: options.changedFields,
-			request_id: requestId
+			request_id: requestId,
+			confirmation_id: options.confirmation?.tokenId,
+			confirmation_confirmed_at: options.confirmation?.confirmedAt,
+			confirmation_requested_at: options.confirmation?.requestedAt
 		}
 	};
 }
@@ -308,11 +334,37 @@ export function registerTaskWriteTools(server: McpServer): void {
 			model: z.string().trim().min(1).max(120).describe('Model used for this plan (e.g. "claude-sonnet-4-20250514")'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "cursor", "claude-desktop")'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			execution_mode: z
+				.enum(['preview', 'execute'])
+				.optional()
+				.describe('Confirmation mode: preview issues confirmation token, execute performs write'),
+			confirmation_token: z
+				.string()
+				.trim()
+				.min(8)
+				.max(200)
+				.optional()
+				.describe('Token returned by preview mode for sensitive writes'),
 			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
 			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ taskId, operation_id, plan, mode, model, agent, tokens, chat_id, chat_name }, extra) => {
+		async (
+			{
+				taskId,
+				operation_id,
+				plan,
+				mode,
+				model,
+				agent,
+				tokens,
+				execution_mode,
+				confirmation_token,
+				chat_id,
+				chat_name
+			},
+			extra
+		) => {
 			const startedAt = Date.now();
 			try {
 				const parsed = PlanSchema.parse(plan);
@@ -327,12 +379,73 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+				if ((currentTask.plan || '').trim() === planContent.trim()) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `✔ Plan already matches requested payload for task \`${currentTask.id.substring(0, 5)}\`.\n\nresult_code: duplicate_replayed`
+							}
+						]
+					};
+				}
+				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
+				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
 					chatName: chat_name,
 					sessionId: extra.sessionId,
 					requestHeaders: extra.requestInfo?.headers
 				});
+				if (resolvedExecutionMode === 'preview') {
+					const confirmation = issueConfirmationToken({
+						tool: 'update_task_plan',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									`## update_task_plan · preview`,
+									`- task_id: ${currentTask.id}`,
+									`- operation_id: ${operation_id}`,
+									`- plan_steps: ${parsed.steps.length}`,
+									`- files_affected: ${parsed.files_affected.length}`,
+									`- payload_hash: ${payloadHash}`,
+									`- confirmation_token: ${confirmation.token}`,
+									`- confirmation_expires_at: ${confirmation.expiresAt}`,
+									`- result_code: preview_ready`
+								].join('\n')
+							}
+						]
+					};
+				}
+
+				let confirmationMeta: ConfirmationMeta | undefined;
+				if (isSensitiveConfirmationEnabled()) {
+					if (!confirmation_token) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: 'CONFIRMATION_REQUIRED: call mode="preview" first, then execute with confirmation_token.'
+								}
+							],
+							isError: true
+						};
+					}
+					confirmationMeta = consumeConfirmationToken({
+						token: confirmation_token,
+						tool: 'update_task_plan',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+				}
+
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_plan',
 					operationId: operation_id,
@@ -344,7 +457,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					tokens: resolvedTokens.tokens,
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['plan'],
-					requestHeaders: extra.requestInfo?.headers
+					requestHeaders: extra.requestInfo?.headers,
+					confirmation: confirmationMeta
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -380,7 +494,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}`
+							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}\n**result_code**: applied`
 						}
 					]
 				};
@@ -397,6 +511,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 					return { content: [{ type: 'text' as const, text: `INVALID_INPUT: Plan validation failed:\n${issues}` }], isError: true };
 				}
 				const err = formatApiError(error);
+				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					return {
+						content: [{ type: 'text' as const, text: `Error: ${err.message}\nresult_code: idempotency_conflict` }],
+						isError: true
+					};
+				}
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
 			}
 		}
@@ -413,11 +533,37 @@ export function registerTaskWriteTools(server: McpServer): void {
 			model: z.string().trim().min(1).max(120).describe('Model used for this walkthrough'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			execution_mode: z
+				.enum(['preview', 'execute'])
+				.optional()
+				.describe('Confirmation mode: preview issues confirmation token, execute performs write'),
+			confirmation_token: z
+				.string()
+				.trim()
+				.min(8)
+				.max(200)
+				.optional()
+				.describe('Token returned by preview mode for sensitive writes'),
 			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
 			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ taskId, operation_id, walkthrough, mode, model, agent, tokens, chat_id, chat_name }, extra) => {
+		async (
+			{
+				taskId,
+				operation_id,
+				walkthrough,
+				mode,
+				model,
+				agent,
+				tokens,
+				execution_mode,
+				confirmation_token,
+				chat_id,
+				chat_name
+			},
+			extra
+		) => {
 			const startedAt = Date.now();
 			try {
 				const parsed = WalkthroughSchema.parse(walkthrough);
@@ -432,12 +578,77 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+				if (
+					(currentTask.walkthrough || '').trim() === walkthroughContent.trim() &&
+					currentTask.status === 'in_review'
+				) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `✔ Walkthrough already matches requested payload for task \`${currentTask.id.substring(0, 5)}\`.\n\nresult_code: duplicate_replayed`
+							}
+						]
+					};
+				}
+				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
+				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
 					chatName: chat_name,
 					sessionId: extra.sessionId,
 					requestHeaders: extra.requestInfo?.headers
 				});
+				if (resolvedExecutionMode === 'preview') {
+					const confirmation = issueConfirmationToken({
+						tool: 'update_task_walkthrough',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									`## update_task_walkthrough · preview`,
+									`- task_id: ${currentTask.id}`,
+									`- operation_id: ${operation_id}`,
+									`- changes: ${parsed.changes.length}`,
+									`- files_modified: ${parsed.files_modified.length}`,
+									`- target_status: in_review`,
+									`- payload_hash: ${payloadHash}`,
+									`- confirmation_token: ${confirmation.token}`,
+									`- confirmation_expires_at: ${confirmation.expiresAt}`,
+									`- result_code: preview_ready`
+								].join('\n')
+							}
+						]
+					};
+				}
+
+				let confirmationMeta: ConfirmationMeta | undefined;
+				if (isSensitiveConfirmationEnabled()) {
+					if (!confirmation_token) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: 'CONFIRMATION_REQUIRED: call mode="preview" first, then execute with confirmation_token.'
+								}
+							],
+							isError: true
+						};
+					}
+					confirmationMeta = consumeConfirmationToken({
+						token: confirmation_token,
+						tool: 'update_task_walkthrough',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+				}
+
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_walkthrough',
 					operationId: operation_id,
@@ -449,7 +660,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					tokens: resolvedTokens.tokens,
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['status', 'walkthrough'],
-					requestHeaders: extra.requestInfo?.headers
+					requestHeaders: extra.requestInfo?.headers,
+					confirmation: confirmationMeta
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -488,7 +700,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}\n**Status**: in_review`
+							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}\n**Status**: in_review\n**result_code**: applied`
 						}
 					]
 				};
@@ -505,6 +717,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 					return { content: [{ type: 'text' as const, text: `INVALID_INPUT: Walkthrough validation failed:\n${issues}` }], isError: true };
 				}
 				const err = formatApiError(error);
+				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					return {
+						content: [{ type: 'text' as const, text: `Error: ${err.message}\nresult_code: idempotency_conflict` }],
+						isError: true
+					};
+				}
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
 			}
 		}
@@ -520,11 +738,36 @@ export function registerTaskWriteTools(server: McpServer): void {
 			model: z.string().trim().min(1).max(120).describe('Model used (for execution metadata tracking)'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			execution_mode: z
+				.enum(['preview', 'execute'])
+				.optional()
+				.describe('Confirmation mode: preview issues confirmation token, execute performs write'),
+			confirmation_token: z
+				.string()
+				.trim()
+				.min(8)
+				.max(200)
+				.optional()
+				.describe('Token returned by preview mode for sensitive writes'),
 			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
 			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ taskId, status, operation_id, model, agent, tokens, chat_id, chat_name }, extra) => {
+		async (
+			{
+				taskId,
+				status,
+				operation_id,
+				model,
+				agent,
+				tokens,
+				execution_mode,
+				confirmation_token,
+				chat_id,
+				chat_name
+			},
+			extra
+		) => {
 			const startedAt = Date.now();
 			try {
 				const config = requireProject();
@@ -532,6 +775,68 @@ export function registerTaskWriteTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+				if (currentTask.status === status) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `✔ Task \`${currentTask.id.substring(0, 5)}\` already has status \`${status}\`.\n\nresult_code: duplicate_replayed`
+							}
+						]
+					};
+				}
+				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
+				const payloadHash = stableHash({ status });
+				const confirmationScope = `task:${projectId}:${currentTask.id}`;
+				if (resolvedExecutionMode === 'preview') {
+					const confirmation = issueConfirmationToken({
+						tool: 'set_task_status',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									`## set_task_status · preview`,
+									`- task_id: ${currentTask.id}`,
+									`- from_status: ${currentTask.status}`,
+									`- to_status: ${status}`,
+									`- operation_id: ${operation_id}`,
+									`- payload_hash: ${payloadHash}`,
+									`- confirmation_token: ${confirmation.token}`,
+									`- confirmation_expires_at: ${confirmation.expiresAt}`,
+									`- result_code: preview_ready`
+								].join('\n')
+							}
+						]
+					};
+				}
+
+				let confirmationMeta: ConfirmationMeta | undefined;
+				if (isSensitiveConfirmationEnabled()) {
+					if (!confirmation_token) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: 'CONFIRMATION_REQUIRED: call mode="preview" first, then execute with confirmation_token.'
+								}
+							],
+							isError: true
+						};
+					}
+					confirmationMeta = consumeConfirmationToken({
+						token: confirmation_token,
+						tool: 'set_task_status',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+				}
+
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
 					chatName: chat_name,
@@ -539,7 +844,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ status }), tokens);
-				const payloadHash = stableHash({ status });
 				const mcpPayload = buildMcpPayload({
 					toolName: 'set_task_status',
 					operationId: operation_id,
@@ -551,7 +855,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					tokens: resolvedTokens.tokens,
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['status'],
-					requestHeaders: extra.requestInfo?.headers
+					requestHeaders: extra.requestInfo?.headers,
+					confirmation: confirmationMeta
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -584,7 +889,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 				});
 
 				return {
-					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` status set to \`${status}\`.` }]
+					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` status set to \`${status}\`.\n\nresult_code: applied` }]
 				};
 			} catch (error) {
 				trackToolCall({
@@ -595,6 +900,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 				const err = formatApiError(error);
+				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					return {
+						content: [{ type: 'text' as const, text: `Error: ${err.message}\nresult_code: idempotency_conflict` }],
+						isError: true
+					};
+				}
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
 			}
 		}
@@ -610,11 +921,36 @@ export function registerTaskWriteTools(server: McpServer): void {
 			model: z.string().trim().min(1).max(120).describe('Model used (for execution metadata tracking)'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			execution_mode: z
+				.enum(['preview', 'execute'])
+				.optional()
+				.describe('Confirmation mode: preview issues confirmation token, execute performs write'),
+			confirmation_token: z
+				.string()
+				.trim()
+				.min(8)
+				.max(200)
+				.optional()
+				.describe('Token returned by preview mode for sensitive writes'),
 			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
 			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-		async ({ taskId, priority, operation_id, model, agent, tokens, chat_id, chat_name }, extra) => {
+		async (
+			{
+				taskId,
+				priority,
+				operation_id,
+				model,
+				agent,
+				tokens,
+				execution_mode,
+				confirmation_token,
+				chat_id,
+				chat_name
+			},
+			extra
+		) => {
 			const startedAt = Date.now();
 			try {
 				const config = requireProject();
@@ -622,6 +958,68 @@ export function registerTaskWriteTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+				if (currentTask.priority === priority) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `✔ Task \`${currentTask.id.substring(0, 5)}\` already has priority \`${priority}\`.\n\nresult_code: duplicate_replayed`
+							}
+						]
+					};
+				}
+				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
+				const payloadHash = stableHash({ priority });
+				const confirmationScope = `task:${projectId}:${currentTask.id}`;
+				if (resolvedExecutionMode === 'preview') {
+					const confirmation = issueConfirmationToken({
+						tool: 'set_task_priority',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									`## set_task_priority · preview`,
+									`- task_id: ${currentTask.id}`,
+									`- from_priority: ${currentTask.priority}`,
+									`- to_priority: ${priority}`,
+									`- operation_id: ${operation_id}`,
+									`- payload_hash: ${payloadHash}`,
+									`- confirmation_token: ${confirmation.token}`,
+									`- confirmation_expires_at: ${confirmation.expiresAt}`,
+									`- result_code: preview_ready`
+								].join('\n')
+							}
+						]
+					};
+				}
+
+				let confirmationMeta: ConfirmationMeta | undefined;
+				if (isSensitiveConfirmationEnabled()) {
+					if (!confirmation_token) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: 'CONFIRMATION_REQUIRED: call mode="preview" first, then execute with confirmation_token.'
+								}
+							],
+							isError: true
+						};
+					}
+					confirmationMeta = consumeConfirmationToken({
+						token: confirmation_token,
+						tool: 'set_task_priority',
+						payloadHash,
+						scope: confirmationScope,
+						actor: agent
+					});
+				}
+
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
 					chatName: chat_name,
@@ -629,7 +1027,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ priority }), tokens);
-				const payloadHash = stableHash({ priority });
 				const mcpPayload = buildMcpPayload({
 					toolName: 'set_task_priority',
 					operationId: operation_id,
@@ -641,7 +1038,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					tokens: resolvedTokens.tokens,
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['priority'],
-					requestHeaders: extra.requestInfo?.headers
+					requestHeaders: extra.requestInfo?.headers,
+					confirmation: confirmationMeta
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -674,7 +1072,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 				});
 
 				return {
-					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` priority set to \`${priority}\`.` }]
+					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` priority set to \`${priority}\`.\n\nresult_code: applied` }]
 				};
 			} catch (error) {
 				trackToolCall({
@@ -685,6 +1083,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 				const err = formatApiError(error);
+				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					return {
+						content: [{ type: 'text' as const, text: `Error: ${err.message}\nresult_code: idempotency_conflict` }],
+						isError: true
+					};
+				}
 				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
 			}
 		}

@@ -12,10 +12,11 @@
 		"fnk": "dist/index.js"
 	},
 	"scripts": {
-		"build": "tsup",
+		"build": "tsup && node scripts/check-tool-capabilities.mjs",
 		"dev": "tsup --watch",
 		"start": "node dist/index.js",
 		"lint": "eslint src",
+		"check:capabilities": "node scripts/check-tool-capabilities.mjs",
 		"qa:invoke": "node scripts/llm-tooling-qa.mjs"
 	},
 	"keywords": [
