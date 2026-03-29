@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireProject } from '../config.js';
+import { requireProject, saveConfig } from '../config.js';
 import { getApiClient, formatApiError } from '../api.js';
 import { stripPrivate, stripPrivateDeep, truncateDeterministic } from '../utils.js';
 import { resolveTaskByIdentifier, updateTaskLastRetrievedAt, type TaskResponse } from './task-common.js';
@@ -28,6 +28,17 @@ const DEFAULT_HISTORY_LIMIT = 3;
 const MAX_HISTORY_LIMIT = 20;
 const DEFAULT_MAX_CHARS = 3500;
 const MAX_ALLOWED_CHARS = 12000;
+const CHAT_ID_HEADER_KEYS = ['x-chat-id', 'x-thread-id', 'x-codex-chat-id', 'x-codex-thread-id'] as const;
+
+interface ResolveChatTaskBindingResponse {
+	state: 'bound' | 'unbound' | 'needs_confirmation';
+	project_id?: string;
+	task_id?: string;
+	reason?: string;
+	status?: string;
+	last_tool?: string;
+	last_seen_at?: string;
+}
 
 interface CompactOptions {
 	historyLimit: number;
@@ -45,6 +56,51 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function stripAndTruncate(content: string, maxChars: number): string {
 	return truncateDeterministic(stripPrivate(content), maxChars);
+}
+
+function getHeaderString(headers: unknown, keys: readonly string[]): string | undefined {
+	if (!isRecord(headers)) return undefined;
+	for (const key of keys) {
+		const direct = headers[key];
+		if (typeof direct === 'string' && direct.trim().length > 0) return direct.trim();
+		if (Array.isArray(direct)) {
+			const found = direct.find((value) => typeof value === 'string' && value.trim().length > 0);
+			if (typeof found === 'string') return found.trim();
+		}
+	}
+	const lowered = Object.entries(headers).reduce<Record<string, unknown>>((acc, [key, value]) => {
+		acc[key.toLowerCase()] = value;
+		return acc;
+	}, {});
+	for (const key of keys) {
+		const fromLower = lowered[key.toLowerCase()];
+		if (typeof fromLower === 'string' && fromLower.trim().length > 0) return fromLower.trim();
+		if (Array.isArray(fromLower)) {
+			const found = fromLower.find((value) => typeof value === 'string' && value.trim().length > 0);
+			if (typeof found === 'string') return found.trim();
+		}
+	}
+	return undefined;
+}
+
+async function syncChatTaskBindingHeartbeat(options: {
+	projectId: string;
+	task: TaskResponse;
+	tool: string;
+	chatId?: string;
+	headers?: unknown;
+}): Promise<void> {
+	const chatId = options.chatId ?? getHeaderString(options.headers, CHAT_ID_HEADER_KEYS);
+	if (!chatId) return;
+	const api = getApiClient();
+	await api.post('/mcp/chat-task-bindings/heartbeat', {
+		chat_id: chatId,
+		project_id: options.projectId,
+		task_id: options.task.id,
+		last_tool: options.tool,
+		last_seen_at: new Date().toISOString(),
+		status: options.task.status
+	});
 }
 
 async function fetchTasksByStatus(projectId: string, statusFilter: string): Promise<TaskResponse[]> {
@@ -289,6 +345,150 @@ function renderTaskSection(
  */
 export function registerTaskReadTools(server: McpServer): void {
 	server.tool(
+		'resolve_chat_task',
+		'Use at chat/session start to deterministically resolve the active task bound to this chat_id.',
+		{
+			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier used as deterministic binding key'),
+			historyLimit: z
+				.number()
+				.int()
+				.min(1)
+				.max(MAX_HISTORY_LIMIT)
+				.optional()
+				.describe('Max history entries to include when state=bound and context is returned'),
+			maxChars: z
+				.number()
+				.int()
+				.min(500)
+				.max(MAX_ALLOWED_CHARS)
+				.optional()
+				.describe('Max chars for compact context fields when state=bound')
+		},
+		{
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
+		},
+		async ({ chat_id, historyLimit, maxChars }, extra) => {
+			const startedAt = Date.now();
+			try {
+				if (!chat_id?.trim()) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: 'CHAT_ID_REQUIRED: resolve_chat_task requires a non-empty chat_id. Explicitly select a task and bind it via normal task tools once chat_id is available.'
+							}
+						],
+						isError: true
+					};
+				}
+
+				const api = getApiClient();
+				const { data } = await api.get<ResolveChatTaskBindingResponse>('/mcp/chat-task-bindings/resolve', {
+					params: { chat_id }
+				});
+
+				if (data.state === 'unbound') {
+					trackToolCall({
+						tool: 'resolve_chat_task',
+						input: { chat_id },
+						output: { state: 'unbound' },
+						latencyMs: Date.now() - startedAt,
+						sessionId: extra.sessionId,
+						chatId: chat_id,
+						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					});
+					return {
+						content: [{ type: 'text' as const, text: `## Chat Task Resolution\n\n- state: unbound\n- chat_id: ${chat_id}` }]
+					};
+				}
+
+				if (data.state === 'needs_confirmation') {
+					trackToolCall({
+						tool: 'resolve_chat_task',
+						input: { chat_id },
+						output: { state: 'needs_confirmation', reason: data.reason },
+						latencyMs: Date.now() - startedAt,
+						sessionId: extra.sessionId,
+						chatId: chat_id,
+						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `## Chat Task Resolution\n\n- state: needs_confirmation\n- reason: ${data.reason || 'unknown'}\n- project_id: ${data.project_id || 'n/a'}\n- task_id: ${data.task_id || 'n/a'}`
+							}
+						]
+					};
+				}
+
+				if (!data.project_id || !data.task_id) {
+					throw new Error('INVALID_RESOLVE_PAYLOAD: state=bound requires project_id and task_id.');
+				}
+
+				const { data: task } = await api.get<TaskResponse>(`/projects/${data.project_id}/tasks/${data.task_id}`);
+				await updateTaskLastRetrievedAt(api, data.project_id, task);
+				await syncChatTaskBindingHeartbeat({
+					projectId: data.project_id,
+					task,
+					tool: 'resolve_chat_task',
+					chatId: chat_id,
+					headers: extra.requestInfo?.headers
+				});
+
+				try {
+					const { data: projects } = await api.get<Array<{ id: string; name: string }>>('/projects');
+					const resolvedProject = projects.find((project) => project.id === data.project_id);
+					saveConfig({
+						currentProjectId: data.project_id,
+						currentProjectName: resolvedProject?.name
+					});
+				} catch {
+					saveConfig({ currentProjectId: data.project_id });
+				}
+
+				const options: CompactOptions = {
+					historyLimit: clampNumber(historyLimit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
+					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
+				};
+				const compact = renderCompactContext(task, options);
+				trackToolCall({
+					tool: 'resolve_chat_task',
+					input: { chat_id },
+					output: { state: 'bound', project_id: data.project_id, task_id: data.task_id },
+					latencyMs: Date.now() - startedAt,
+					sessionId: extra.sessionId,
+					chatId: chat_id,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: `## Chat Task Resolution\n\n- state: bound\n- chat_id: ${chat_id}\n- project_id: ${data.project_id}\n- task_id: ${data.task_id}\n\n${compact}`
+						}
+					]
+				};
+			} catch (error) {
+				trackToolCall({
+					tool: 'resolve_chat_task',
+					input: { chat_id },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					sessionId: extra.sessionId,
+					chatId: chat_id,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
+				const err = formatApiError(error);
+				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+			}
+		}
+	);
+
+	server.tool(
 		'list_tasks',
 		'Use when the user asks to see tasks in the active project, optionally filtered by status.',
 		{
@@ -462,7 +662,7 @@ export function registerTaskReadTools(server: McpServer): void {
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId, historyLimit, maxChars }) => {
+		async ({ taskId, historyLimit, maxChars }, extra) => {
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -470,6 +670,12 @@ export function registerTaskReadTools(server: McpServer): void {
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
 				await updateTaskLastRetrievedAt(api, projectId, task);
+				await syncChatTaskBindingHeartbeat({
+					projectId,
+					task,
+					tool: 'get_task_context_compact',
+					headers: extra.requestInfo?.headers
+				});
 
 				const options: CompactOptions = {
 					historyLimit: clampNumber(historyLimit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
@@ -498,7 +704,7 @@ export function registerTaskReadTools(server: McpServer): void {
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId }) => {
+		async ({ taskId }, extra) => {
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -506,6 +712,12 @@ export function registerTaskReadTools(server: McpServer): void {
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
 				await updateTaskLastRetrievedAt(api, projectId, task);
+				await syncChatTaskBindingHeartbeat({
+					projectId,
+					task,
+					tool: 'get_task_context_full',
+					headers: extra.requestInfo?.headers
+				});
 
 				return {
 					content: [{ type: 'text' as const, text: renderFullContext(task) }]
@@ -544,7 +756,7 @@ export function registerTaskReadTools(server: McpServer): void {
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId, section, historyLimit, maxChars }) => {
+		async ({ taskId, section, historyLimit, maxChars }, extra) => {
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -552,6 +764,12 @@ export function registerTaskReadTools(server: McpServer): void {
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
 				await updateTaskLastRetrievedAt(api, projectId, task);
+				await syncChatTaskBindingHeartbeat({
+					projectId,
+					task,
+					tool: 'get_task_section',
+					headers: extra.requestInfo?.headers
+				});
 
 				const options: CompactOptions = {
 					historyLimit: clampNumber(historyLimit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),

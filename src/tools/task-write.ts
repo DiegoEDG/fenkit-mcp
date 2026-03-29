@@ -389,6 +389,30 @@ function resolveChatContext(options: {
 	};
 }
 
+async function syncChatTaskBindingHeartbeatFromWrite(options: {
+	projectId: string;
+	taskId: string;
+	status: string;
+	lastTool: string;
+	chatId?: string;
+	requestHeaders?: unknown;
+}): Promise<void> {
+	const resolvedChatId =
+		pickString(options.chatId) ??
+		pickHeaderValue(options.requestHeaders, ['x-chat-id', 'x-thread-id', 'x-codex-chat-id', 'x-codex-thread-id']);
+	if (!resolvedChatId) return;
+
+	const api = getApiClient();
+	await api.post('/mcp/chat-task-bindings/heartbeat', {
+		chat_id: resolvedChatId,
+		project_id: options.projectId,
+		task_id: options.taskId,
+		last_tool: options.lastTool,
+		last_seen_at: new Date().toISOString(),
+		status: options.status
+	});
+}
+
 async function patchTaskWithRetryAndVerification(
 	api: AxiosInstance,
 	projectId: string,
@@ -596,6 +620,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 						);
 					}
 				);
+				await syncChatTaskBindingHeartbeatFromWrite({
+					projectId,
+					taskId: currentTask.id,
+					status: currentTask.status,
+					lastTool: 'update_task_plan',
+					chatId: chat_id,
+					requestHeaders: extra.requestInfo?.headers
+				});
 				trackToolCall({
 					tool: 'update_task_plan',
 					input: { taskId, operation_id, mode: artifactMode },
@@ -808,6 +840,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 						);
 					}
 				);
+				await syncChatTaskBindingHeartbeatFromWrite({
+					projectId,
+					taskId: currentTask.id,
+					status: 'in_review',
+					lastTool: 'update_task_walkthrough',
+					chatId: chat_id,
+					requestHeaders: extra.requestInfo?.headers
+				});
 				trackToolCall({
 					tool: 'update_task_walkthrough',
 					input: { taskId, operation_id, mode: artifactMode },
@@ -1001,6 +1041,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const attemptsUsed = await patchTaskWithRetryAndVerification(api, projectId, currentTask.id, updatePayload, (persistedTask) => {
 					return persistedTask.status === status;
 				});
+				await syncChatTaskBindingHeartbeatFromWrite({
+					projectId,
+					taskId: currentTask.id,
+					status,
+					lastTool: 'set_task_status',
+					chatId: chat_id,
+					requestHeaders: extra.requestInfo?.headers
+				});
 
 				trackToolCall({
 					tool: 'set_task_status',
@@ -1164,6 +1212,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(api, projectId, currentTask.id, updatePayload, (persistedTask) => {
 					return persistedTask.priority === priority;
+				});
+				await syncChatTaskBindingHeartbeatFromWrite({
+					projectId,
+					taskId: currentTask.id,
+					status: currentTask.status,
+					lastTool: 'set_task_priority',
+					chatId: chat_id,
+					requestHeaders: extra.requestInfo?.headers
 				});
 
 				trackToolCall({

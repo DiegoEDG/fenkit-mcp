@@ -16,6 +16,10 @@ This protocol defines how AI agents should coordinate work using Fenkit MCP so t
 At session start (or after context reset):
 - Call `get_status`.
 - If no project is active, call `list_projects` then `select_project`.
+- If `chat_id` is available, call `resolve_chat_task(chat_id)` before loading task context.
+  - `bound`: continue with the returned task context.
+  - `unbound`: continue with explicit task selection flow.
+  - `needs_confirmation`: ask user which task to bind next (no silent auto-bind).
 
 ### 2) Task Discovery
 - Use `list_tasks` or `search_tasks` to identify work.
@@ -51,6 +55,8 @@ update_task_walkthrough(taskId, operation_id, walkthrough, model, agent)
 - `model` and `agent` fields are required in write operations for execution tracking.
 - Compact retrieval is preferred to reduce tokens.
 - Metadata history is appended on each write operation.
+- Task read/write operations refresh chat-task heartbeat when `chat_id` is present.
+- If `chat_id` is missing, never infer binding from `chat_name`; require explicit selection first.
 
 ---
 
