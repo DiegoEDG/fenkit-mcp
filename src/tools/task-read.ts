@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { requireProject, saveConfig } from '../config.js';
 import { getApiClient, formatApiError } from '../api.js';
 import { stripPrivate, stripPrivateDeep, truncateDeterministic } from '../utils.js';
-import { resolveTaskByIdentifier, updateTaskLastRetrievedAt, type TaskResponse } from './task-common.js';
+import { resolveTaskByIdentifier, type TaskResponse } from './task-common.js';
 import { TaskIdentifierSchema } from '../schemas.js';
 import { extractPromptFromHeaders, trackToolCall } from '../observability.js';
 
@@ -111,63 +111,8 @@ async function fetchTasksByStatus(projectId: string, statusFilter: string): Prom
 	return data;
 }
 
-function compactExecution(execution: unknown): Record<string, unknown> | null {
-	if (!isRecord(execution)) return null;
-	const git = isRecord(execution.git) ? execution.git : {};
-	return {
-		timestamp: execution.timestamp,
-		executed_at: execution.executed_at ?? execution.timestamp,
-		'Executed at': execution.executed_at ?? execution.timestamp,
-		model: execution.model,
-		agent: execution.agent,
-		'Agent/Client': execution.agent_client ?? execution.agent,
-		provider: execution.provider,
-		durationMs: execution.durationMs,
-		duration: execution.duration ?? execution.durationMs,
-		token_source: execution.token_source,
-		chat_id: execution.chat_id,
-		chat_name: execution.chat_name,
-		chat_title: execution.chat_title ?? execution.chat_name,
-		'Chat title': execution.chat_title ?? execution.chat_name,
-		git_branch: execution.git_branch ?? git.branch,
-		'Git branch': execution.git_branch ?? git.branch,
-		git_repo: execution.git_repo ?? git.repo,
-		'Git Repo': execution.git_repo ?? git.repo,
-		tokens: isRecord(execution.tokens)
-			? { estimate: execution.tokens.estimate, total: execution.tokens.total }
-			: undefined,
-		total_tokens: execution.total_tokens ?? execution['total tokens'],
-		'total tokens': execution.total_tokens ?? execution['total tokens']
-	};
-}
-
-function getMcpSchemas(meta: Record<string, unknown>): { planSchema?: unknown; walkthroughSchema?: unknown } {
-	const mcp = meta.mcp;
-	if (!isRecord(mcp)) return {};
-	return {
-		planSchema: mcp.planSchema,
-		walkthroughSchema: mcp.walkthroughSchema
-	};
-}
-
-function sanitizeMetadata(meta: Record<string, unknown>): Record<string, unknown> {
-	const sanitized = stripPrivateDeep(meta);
-	return isRecord(sanitized) ? sanitized : {};
-}
-
 function renderCompactContext(task: TaskResponse, options: CompactOptions): string {
-	const meta = sanitizeMetadata((task.implementationMetadata as Record<string, unknown>) || {});
-	const { planSchema, walkthroughSchema } = getMcpSchemas(meta);
-	const mcp = isRecord(meta.mcp) ? meta.mcp : {};
-	const mcpAnalytics = isRecord(mcp.analytics) ? mcp.analytics : {};
-	const overallTokens = isRecord(mcpAnalytics.overallTokens) ? mcpAnalytics.overallTokens : null;
-	const latestChat = isRecord(mcp.chat) ? mcp.chat : null;
-	const history = Array.isArray(meta.history) ? meta.history : [];
-	const compactHistory = history
-		.slice(-options.historyLimit)
-		.map((item) => compactExecution(item))
-		.filter(Boolean);
-	const latestExecution = compactExecution(meta.lastExecution);
+	const context = isRecord(task.mcpContext) ? task.mcpContext : null;
 
 	const sections: string[] = [];
 	sections.push(`# ${task.title}`);
@@ -184,69 +129,30 @@ function renderCompactContext(task: TaskResponse, options: CompactOptions): stri
 	sections.push(task.description ? stripAndTruncate(task.description, options.maxChars) : '_(no description)_');
 	sections.push('');
 
-	if (isRecord(planSchema)) {
+	if (task.plan) {
 		sections.push('## Plan Summary');
-		sections.push(`- Summary: ${String(planSchema.summary || 'n/a')}`);
-		if (Array.isArray(planSchema.steps)) {
-			sections.push(`- Steps: ${(planSchema.steps as unknown[]).length}`);
-		}
-		if (Array.isArray(planSchema.files_affected)) {
-			sections.push(`- Files affected: ${(planSchema.files_affected as unknown[]).length}`);
-		}
+		sections.push(stripAndTruncate(task.plan, options.maxChars));
 		sections.push('');
 	}
 
-	if (isRecord(walkthroughSchema)) {
+	if (task.walkthrough) {
 		sections.push('## Walkthrough Summary');
-		sections.push(`- Summary: ${String(walkthroughSchema.summary || 'n/a')}`);
-		if (Array.isArray(walkthroughSchema.changes)) {
-			sections.push(`- Changes: ${(walkthroughSchema.changes as unknown[]).length}`);
-		}
-		if (Array.isArray(walkthroughSchema.files_modified)) {
-			sections.push(`- Files modified: ${(walkthroughSchema.files_modified as unknown[]).length}`);
-		}
+		sections.push(stripAndTruncate(task.walkthrough, options.maxChars));
 		sections.push('');
 	}
 
-	if (latestExecution) {
-		sections.push('## Latest Execution');
-		sections.push('```json');
-		sections.push(JSON.stringify(latestExecution));
-		sections.push('```');
-		sections.push('');
-	}
-
-	if (latestChat) {
+	if (context) {
 		sections.push('## Latest Chat Context');
-		sections.push(`- Chat ID: ${String(latestChat.id || 'n/a')}`);
-		sections.push(`- Chat name: ${String(latestChat.name || 'n/a')}`);
-		sections.push(`- Last seen: ${String(latestChat.lastSeenAt || 'n/a')}`);
-		sections.push('');
-	}
-
-	if (overallTokens) {
-		sections.push('## Cumulative Tokens');
-		sections.push('```json');
-		sections.push(
-			JSON.stringify({
-				source: mcpAnalytics.overallTokenSource,
-				totals: overallTokens
-			})
-		);
-		sections.push('```');
-		sections.push('');
-	}
-
-	if (compactHistory.length > 0) {
-		sections.push(`## Execution History (last ${compactHistory.length})`);
-		sections.push('```json');
-		sections.push(JSON.stringify(compactHistory));
-		sections.push('```');
+		sections.push(`- Actor: ${String(context.actor || 'n/a')}`);
+		sections.push(`- Tool: ${String(context.tool || 'n/a')}`);
+		sections.push(`- Chat ID: ${String(context.last_chat_id || 'n/a')}`);
+		sections.push(`- Chat name: ${String(context.last_chat_name || 'n/a')}`);
+		sections.push(`- Last seen: ${String(context.last_seen_at || 'n/a')}`);
 		sections.push('');
 	}
 
 	sections.push(
-		'> Compact mode intentionally omits full plan/walkthrough and full metadata. Call `get_task_context_full` or `get_task_section` if needed.'
+		'> Compact mode intentionally omits full sections. Call `get_task_context_full` or `get_task_section` if needed.'
 	);
 
 	return sections.join('\n');
@@ -281,11 +187,11 @@ function renderFullContext(task: TaskResponse): string {
 		sections.push('');
 	}
 
-	const metadata = sanitizeMetadata((task.implementationMetadata as Record<string, unknown>) || {});
-	if (Object.keys(metadata).length > 0) {
-		sections.push('## Implementation Metadata');
+	const context = stripPrivateDeep(task.mcpContext || {});
+	if (isRecord(context) && Object.keys(context).length > 0) {
+		sections.push('## MCP Context');
 		sections.push('```json');
-		sections.push(JSON.stringify(metadata, null, 2));
+		sections.push(JSON.stringify(context, null, 2));
 		sections.push('```');
 		sections.push('');
 	}
@@ -298,7 +204,7 @@ function renderTaskSection(
 	section: z.infer<typeof SectionSchema>,
 	options: CompactOptions
 ): string {
-	const metadata = sanitizeMetadata((task.implementationMetadata as Record<string, unknown>) || {});
+	const context = stripPrivateDeep(task.mcpContext || {});
 	const lines: string[] = [];
 	lines.push(`# ${task.title}`);
 	lines.push('');
@@ -320,22 +226,20 @@ function renderTaskSection(
 	}
 
 	if (section === 'history') {
-		const history = Array.isArray(metadata.history) ? metadata.history : [];
-		const compactHistory = history
-			.slice(-options.historyLimit)
-			.map((item) => compactExecution(item))
-			.filter(Boolean);
-		lines.push(`## History (last ${compactHistory.length})`);
-		lines.push('```json');
-		lines.push(truncateDeterministic(JSON.stringify(compactHistory, null, 2), options.maxChars));
-		lines.push('```');
+		lines.push('## History');
+		lines.push('_History has moved to backend audit logs and is no longer returned via task metadata._');
 		return lines.join('\n');
 	}
 
 	// metadata section
-	lines.push('## Metadata');
+	lines.push('## MCP Context');
 	lines.push('```json');
-	lines.push(truncateDeterministic(JSON.stringify(metadata, null, 2), options.maxChars));
+	lines.push(
+		truncateDeterministic(
+			JSON.stringify(isRecord(context) ? context : {}, null, 2),
+			options.maxChars
+		)
+	);
 	lines.push('```');
 	return lines.join('\n');
 }
@@ -430,7 +334,6 @@ export function registerTaskReadTools(server: McpServer): void {
 				}
 
 				const { data: task } = await api.get<TaskResponse>(`/projects/${data.project_id}/tasks/${data.task_id}`);
-				await updateTaskLastRetrievedAt(api, data.project_id, task);
 				await syncChatTaskBindingHeartbeat({
 					projectId: data.project_id,
 					task,
@@ -669,7 +572,6 @@ export function registerTaskReadTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
-				await updateTaskLastRetrievedAt(api, projectId, task);
 				await syncChatTaskBindingHeartbeat({
 					projectId,
 					task,
@@ -711,7 +613,6 @@ export function registerTaskReadTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
-				await updateTaskLastRetrievedAt(api, projectId, task);
 				await syncChatTaskBindingHeartbeat({
 					projectId,
 					task,
@@ -763,7 +664,6 @@ export function registerTaskReadTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
-				await updateTaskLastRetrievedAt(api, projectId, task);
 				await syncChatTaskBindingHeartbeat({
 					projectId,
 					task,

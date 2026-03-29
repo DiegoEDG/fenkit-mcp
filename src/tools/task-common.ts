@@ -11,6 +11,7 @@ export interface TaskResponse {
 	plan?: string | null;
 	walkthrough?: string | null;
 	implementationMetadata?: Record<string, unknown> | null;
+	mcpContext?: Record<string, unknown> | null;
 	createdBy: string;
 	updatedBy?: string | null;
 	createdAt: string;
@@ -68,18 +69,4 @@ export async function resolveTaskByIdentifier(
 		.map((task) => `\`${task.id.substring(0, 5)}\` ${task.title}`)
 		.join(', ');
 	throw new Error(`AMBIGUOUS_TASK_ID: Multiple tasks match "${identifier}": ${candidates}`);
-}
-
-export async function updateTaskLastRetrievedAt(
-	api: AxiosInstance,
-	projectId: string,
-	task: TaskResponse
-): Promise<void> {
-	const existingMetadata = (task.implementationMetadata as Record<string, unknown>) || {};
-	await api.patch(`/projects/${projectId}/tasks/${task.id}`, {
-		implementationMetadata: {
-			...existingMetadata,
-			lastRetrievedAt: new Date().toISOString()
-		}
-	});
 }
