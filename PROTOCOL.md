@@ -30,15 +30,15 @@ At session start (or after context reset):
 ### 3) Planning
 Before coding, submit a structured plan:
 ```text
-update_task_plan(taskId, operation_id, plan, model, agent)
+update_task_plan(taskId, operation_id?, plan, model?, agent?)
 ```
 Use `execution_mode="preview"` first (when confirmation is enabled), then execute with `confirmation_token`.
 
 ### 4) Execution
 When starting implementation:
 ```text
-set_task_status(taskId, status, operation_id, model, agent)
-set_task_priority(taskId, priority, operation_id, model, agent)
+set_task_status(taskId, status, operation_id?, model?, agent?)
+set_task_priority(taskId, priority, operation_id?, model?, agent?)
 ```
 Use `status="in_progress"` when work begins.
 For sensitive writes (`select_project`, status/priority changes, plan/walkthrough updates), prefer preview → execute flow.
@@ -47,7 +47,7 @@ For sensitive writes (`select_project`, status/priority changes, plan/walkthroug
 After verification:
 1. Submit walkthrough:
 ```text
-update_task_walkthrough(taskId, operation_id, walkthrough, model, agent)
+update_task_walkthrough(taskId, operation_id?, walkthrough, model?, agent?)
 ```
 2. Task is automatically moved to `in_review` after walkthrough persistence.
 
@@ -55,7 +55,8 @@ update_task_walkthrough(taskId, operation_id, walkthrough, model, agent)
 
 ## ⚙️ Tooling Notes
 
-- `model` and `agent` fields are required in write operations for execution tracking.
+- `operation_id`, `model`, and `agent` are optional in write operations (auto-derived when omitted).
+- Agents should persist lifecycle writes proactively; do not ask the user for every routine tool call.
 - Compact retrieval is preferred to reduce tokens.
 - Metadata history is appended on each write operation.
 - Task read/write operations refresh chat-task heartbeat when `chat_id` is present.

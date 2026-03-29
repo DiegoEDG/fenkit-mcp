@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AxiosInstance } from 'axios';
+import { randomUUID } from 'node:crypto';
 import { requireProject } from '../config.js';
 import { getApiClient, formatApiError } from '../api.js';
 import {
@@ -113,6 +114,8 @@ function renderWalkthroughMarkdown(walkthrough: z.infer<typeof WalkthroughSchema
 
 const WRITE_RETRY_ATTEMPTS = 3;
 const WRITE_RETRY_BACKOFF_MS = 250;
+const DEFAULT_AGENT = 'mcp-client';
+const DEFAULT_MODEL = 'unknown';
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -182,6 +185,28 @@ function resolveChatContext(options: {
 	const chatName = pickString(options.chatName) ?? headerChatName ?? `Chat ${chatId}`;
 
 	return { chatId, chatName, sessionId };
+}
+
+function resolveAgentName(options: { agent?: string; requestHeaders?: unknown }): string {
+	return (
+		pickString(options.agent) ??
+		pickHeaderValue(options.requestHeaders, ['x-agent', 'x-client', 'x-client-name', 'x-codex-client']) ??
+		DEFAULT_AGENT
+	);
+}
+
+function resolveModelName(options: { model?: string; requestHeaders?: unknown }): string {
+	return (
+		pickString(options.model) ??
+		pickHeaderValue(options.requestHeaders, ['x-model', 'x-llm-model', 'x-openai-model', 'x-codex-model']) ??
+		DEFAULT_MODEL
+	);
+}
+
+function resolveOperationId(options: { operationId?: string; toolName: string }): string {
+	const provided = pickString(options.operationId);
+	if (provided) return provided;
+	return `auto:${options.toolName}:${Date.now()}:${randomUUID().slice(0, 8)}`;
 }
 
 function toFiniteNumber(value: unknown): number | undefined {
@@ -291,7 +316,6 @@ function buildMcpPayload(options: {
 	requestHeaders?: unknown;
 	confirmation?: ConfirmationMeta;
 }): { mcpContext: Record<string, unknown>; mcpEvent: Record<string, unknown> } {
-	const requestId = pickHeaderValue(options.requestHeaders, ['x-request-id']);
 	return {
 		mcpContext: {
 			actor: options.agent,
@@ -311,7 +335,6 @@ function buildMcpPayload(options: {
 			tokens: options.tokens,
 			latency_ms: options.latencyMs ?? 0,
 			changed_fields: options.changedFields,
-			request_id: requestId,
 			confirmation_id: options.confirmation?.tokenId,
 			confirmation_confirmed_at: options.confirmation?.confirmedAt,
 			confirmation_requested_at: options.confirmation?.requestedAt
@@ -325,14 +348,14 @@ function buildMcpPayload(options: {
 export function registerTaskWriteTools(server: McpServer): void {
 	server.tool(
 		'update_task_plan',
-		'Use when the user asks to define or revise an implementation plan for a task before coding.',
+		'Persist or revise an implementation plan for a task before/during execution.',
 		{
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
-			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
+			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			plan: PlanSchema,
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete plan already exists.'),
-			model: z.string().trim().min(1).max(120).describe('Model used for this plan (e.g. "claude-sonnet-4-20250514")'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "cursor", "claude-desktop")'),
+			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for this plan. Auto-derived from headers or defaults.'),
+			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -372,6 +395,9 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const artifactMode = mode ?? 'mini';
 				const resolvedTokens = resolveTokens(planContent, tokens);
 				const payloadHash = stableHash({ plan: parsed, mode: artifactMode });
+				const resolvedOperationId = resolveOperationId({ operationId: operation_id, toolName: 'update_task_plan' });
+				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
+				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -379,16 +405,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
-				if ((currentTask.plan || '').trim() === planContent.trim()) {
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text: `✔ Plan already matches requested payload for task \`${currentTask.id.substring(0, 5)}\`.\n\nresult_code: duplicate_replayed`
-							}
-						]
-					};
-				}
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
@@ -402,7 +418,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'update_task_plan',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 					return {
 						content: [
@@ -411,7 +427,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 								text: [
 									`## update_task_plan · preview`,
 									`- task_id: ${currentTask.id}`,
-									`- operation_id: ${operation_id}`,
+									`- operation_id: ${resolvedOperationId}`,
 									`- plan_steps: ${parsed.steps.length}`,
 									`- files_affected: ${parsed.files_affected.length}`,
 									`- payload_hash: ${payloadHash}`,
@@ -442,16 +458,16 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'update_task_plan',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 				}
 
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_plan',
-					operationId: operation_id,
+					operationId: resolvedOperationId,
 					payloadHash,
-					agent,
-					model,
+					agent: resolvedAgent,
+					model: resolvedModel,
 					chatContext,
 					tokenSource: resolvedTokens.tokenSource,
 					tokens: resolvedTokens.tokens,
@@ -480,7 +496,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				trackToolCall({
 					tool: 'update_task_plan',
-					input: { taskId, operation_id, mode: artifactMode },
+					input: { taskId, operation_id: resolvedOperationId, mode: artifactMode },
 					output: { steps: parsed.steps.length, files: parsed.files_affected.length },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
@@ -494,7 +510,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}\n**result_code**: applied`
+							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied`
 						}
 					]
 				};
@@ -524,14 +540,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 	server.tool(
 		'update_task_walkthrough',
-		'Use when the user asks to capture what was implemented, validated, and decided after execution.',
+		'Persist a post-execution walkthrough and move the task lifecycle to in_review.',
 		{
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
-			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
+			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			walkthrough: WalkthroughSchema,
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete walkthrough already exists.'),
-			model: z.string().trim().min(1).max(120).describe('Model used for this walkthrough'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
+			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for this walkthrough. Auto-derived from headers or defaults.'),
+			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -571,6 +587,9 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const artifactMode = mode ?? 'mini';
 				const resolvedTokens = resolveTokens(walkthroughContent, tokens);
 				const payloadHash = stableHash({ walkthrough: parsed, mode: artifactMode });
+				const resolvedOperationId = resolveOperationId({ operationId: operation_id, toolName: 'update_task_walkthrough' });
+				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
+				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -578,19 +597,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
-				if (
-					(currentTask.walkthrough || '').trim() === walkthroughContent.trim() &&
-					currentTask.status === 'in_review'
-				) {
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text: `✔ Walkthrough already matches requested payload for task \`${currentTask.id.substring(0, 5)}\`.\n\nresult_code: duplicate_replayed`
-							}
-						]
-					};
-				}
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
@@ -604,7 +610,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'update_task_walkthrough',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 					return {
 						content: [
@@ -613,7 +619,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 								text: [
 									`## update_task_walkthrough · preview`,
 									`- task_id: ${currentTask.id}`,
-									`- operation_id: ${operation_id}`,
+									`- operation_id: ${resolvedOperationId}`,
 									`- changes: ${parsed.changes.length}`,
 									`- files_modified: ${parsed.files_modified.length}`,
 									`- target_status: in_review`,
@@ -645,16 +651,16 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'update_task_walkthrough',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 				}
 
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_walkthrough',
-					operationId: operation_id,
+					operationId: resolvedOperationId,
 					payloadHash,
-					agent,
-					model,
+					agent: resolvedAgent,
+					model: resolvedModel,
 					chatContext,
 					tokenSource: resolvedTokens.tokenSource,
 					tokens: resolvedTokens.tokens,
@@ -686,7 +692,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				trackToolCall({
 					tool: 'update_task_walkthrough',
-					input: { taskId, operation_id, mode: artifactMode },
+					input: { taskId, operation_id: resolvedOperationId, mode: artifactMode },
 					output: { changes: parsed.changes.length, files: parsed.files_modified.length },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
@@ -700,7 +706,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}\n**Status**: in_review\n**result_code**: applied`
+							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}\n**Status**: in_review\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied`
 						}
 					]
 				};
@@ -730,13 +736,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 	server.tool(
 		'set_task_status',
-		'Use when the user explicitly asks to move a task to a lifecycle status (except done).',
+		'Set task lifecycle status during execution flow (except done).',
 		{
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			status: TaskStatusSchema.describe('New status: todo, in_progress, in_review, backlog, frozen'),
-			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
-			model: z.string().trim().min(1).max(120).describe('Model used (for execution metadata tracking)'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
+			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
+			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for execution metadata. Auto-derived from headers or defaults.'),
+			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -770,21 +776,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 		) => {
 			const startedAt = Date.now();
 			try {
+				const resolvedOperationId = resolveOperationId({ operationId: operation_id, toolName: 'set_task_status' });
+				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
+				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 				const config = requireProject();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
-				if (currentTask.status === status) {
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text: `✔ Task \`${currentTask.id.substring(0, 5)}\` already has status \`${status}\`.\n\nresult_code: duplicate_replayed`
-							}
-						]
-					};
-				}
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
 				const payloadHash = stableHash({ status });
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
@@ -793,7 +792,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'set_task_status',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 					return {
 						content: [
@@ -804,7 +803,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 									`- task_id: ${currentTask.id}`,
 									`- from_status: ${currentTask.status}`,
 									`- to_status: ${status}`,
-									`- operation_id: ${operation_id}`,
+									`- operation_id: ${resolvedOperationId}`,
 									`- payload_hash: ${payloadHash}`,
 									`- confirmation_token: ${confirmation.token}`,
 									`- confirmation_expires_at: ${confirmation.expiresAt}`,
@@ -833,7 +832,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'set_task_status',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 				}
 
@@ -846,10 +845,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const resolvedTokens = resolveTokens(JSON.stringify({ status }), tokens);
 				const mcpPayload = buildMcpPayload({
 					toolName: 'set_task_status',
-					operationId: operation_id,
+					operationId: resolvedOperationId,
 					payloadHash,
-					agent,
-					model,
+					agent: resolvedAgent,
+					model: resolvedModel,
 					chatContext,
 					tokenSource: resolvedTokens.tokenSource,
 					tokens: resolvedTokens.tokens,
@@ -878,7 +877,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				trackToolCall({
 					tool: 'set_task_status',
-					input: { taskId, status, operation_id },
+					input: { taskId, status, operation_id: resolvedOperationId },
 					output: { status },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
@@ -889,7 +888,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 				});
 
 				return {
-					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` status set to \`${status}\`.\n\nresult_code: applied` }]
+					content: [
+						{
+							type: 'text' as const,
+							text: `✔ Task \`${currentTask.id.substring(0, 5)}\` status set to \`${status}\`.\n\n**Operation ID**: ${resolvedOperationId}\nresult_code: applied`
+						}
+					]
 				};
 			} catch (error) {
 				trackToolCall({
@@ -913,13 +917,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 	server.tool(
 		'set_task_priority',
-		'Use when the user explicitly asks to change urgency or priority of an existing task.',
+		'Set task priority as part of lifecycle execution updates.',
 		{
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			priority: TaskPrioritySchema.describe('New priority: low, medium, high, urgent'),
-			operation_id: OperationIdSchema.describe('Client-generated idempotency key for this write'),
-			model: z.string().trim().min(1).max(120).describe('Model used (for execution metadata tracking)'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
+			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
+			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for execution metadata. Auto-derived from headers or defaults.'),
+			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -953,21 +957,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 		) => {
 			const startedAt = Date.now();
 			try {
+				const resolvedOperationId = resolveOperationId({ operationId: operation_id, toolName: 'set_task_priority' });
+				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
+				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 				const config = requireProject();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
-				if (currentTask.priority === priority) {
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text: `✔ Task \`${currentTask.id.substring(0, 5)}\` already has priority \`${priority}\`.\n\nresult_code: duplicate_replayed`
-							}
-						]
-					};
-				}
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
 				const payloadHash = stableHash({ priority });
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
@@ -976,7 +973,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'set_task_priority',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 					return {
 						content: [
@@ -987,7 +984,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 									`- task_id: ${currentTask.id}`,
 									`- from_priority: ${currentTask.priority}`,
 									`- to_priority: ${priority}`,
-									`- operation_id: ${operation_id}`,
+									`- operation_id: ${resolvedOperationId}`,
 									`- payload_hash: ${payloadHash}`,
 									`- confirmation_token: ${confirmation.token}`,
 									`- confirmation_expires_at: ${confirmation.expiresAt}`,
@@ -1016,7 +1013,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 						tool: 'set_task_priority',
 						payloadHash,
 						scope: confirmationScope,
-						actor: agent
+						actor: resolvedAgent
 					});
 				}
 
@@ -1029,10 +1026,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const resolvedTokens = resolveTokens(JSON.stringify({ priority }), tokens);
 				const mcpPayload = buildMcpPayload({
 					toolName: 'set_task_priority',
-					operationId: operation_id,
+					operationId: resolvedOperationId,
 					payloadHash,
-					agent,
-					model,
+					agent: resolvedAgent,
+					model: resolvedModel,
 					chatContext,
 					tokenSource: resolvedTokens.tokenSource,
 					tokens: resolvedTokens.tokens,
@@ -1061,7 +1058,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				trackToolCall({
 					tool: 'set_task_priority',
-					input: { taskId, priority, operation_id },
+					input: { taskId, priority, operation_id: resolvedOperationId },
 					output: { priority },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
@@ -1072,7 +1069,12 @@ export function registerTaskWriteTools(server: McpServer): void {
 				});
 
 				return {
-					content: [{ type: 'text' as const, text: `✔ Task \`${currentTask.id.substring(0, 5)}\` priority set to \`${priority}\`.\n\nresult_code: applied` }]
+					content: [
+						{
+							type: 'text' as const,
+							text: `✔ Task \`${currentTask.id.substring(0, 5)}\` priority set to \`${priority}\`.\n\n**Operation ID**: ${resolvedOperationId}\nresult_code: applied`
+						}
+					]
 				};
 			} catch (error) {
 				trackToolCall({

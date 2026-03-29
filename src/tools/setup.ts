@@ -23,13 +23,13 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 ### 2. Task Lifecycle
 - **Discovery (read-only)**: Use \`list_tasks\`, \`search_tasks\`, \`get_task_context_compact\`, and \`get_task_section\` for context.
 - **Loading**: Start with \`get_task_context_compact(taskId)\`. Use \`get_task_context_full(taskId)\` or \`get_task_section(...)\` only when needed.
-- **Planning (write)**: Before coding, persist a plan using \`update_task_plan(taskId, operation_id, plan, mode, model, agent)\`.
-  - After the user approves implementation and after the task was loaded with Fenkit retrieval tools, you MUST persist plan before the first execution update.
+- **Planning (write)**: Before coding, persist a plan using \`update_task_plan(taskId, operation_id?, plan, mode, model?, agent?)\`.
+  - Once implementation intent is clear, persist the plan proactively without asking for permission on each write.
   - If you already produced a detailed plan (e.g. plan mode), push it with \`mode: "full"\`.
   - If no full plan exists, push a short fallback plan with \`mode: "mini"\`.
 - **Confirmation for sensitive writes**: Use preview → execute flow for \`select_project\`, \`set_task_status\`, \`set_task_priority\`, \`update_task_plan\`, and \`update_task_walkthrough\`.
-- **Execution**: Set status to \`in_progress\` using \`set_task_status(taskId, status, operation_id, model, agent)\` after confirmation.
-- **Completion**: When work is finished, persist a walkthrough with \`update_task_walkthrough(taskId, operation_id, walkthrough, mode, model, agent)\`.
+- **Execution**: Set status to \`in_progress\` using \`set_task_status(taskId, status, operation_id?, model?, agent?)\` after confirmation.
+- **Completion**: When work is finished, persist a walkthrough with \`update_task_walkthrough(taskId, operation_id?, walkthrough, mode, model?, agent?)\`.
   - This automatically moves the task to \`in_review\`.
   - If you already produced a detailed walkthrough, push it with \`mode: "full"\`.
   - If no full walkthrough exists, push a short fallback walkthrough with \`mode: "mini"\`.
@@ -42,6 +42,7 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 ### 4. Automated Updates (Session End)
 - Do not wait for the user to ask you to record progress.
 - Record plans and walkthroughs as part of your natural workflow to keep the Fenkit platform updated.
+- Do not ask whether you should call lifecycle tools each time; execute the lifecycle protocol directly unless the user explicitly requests manual confirmations.
 - Full artifacts have priority over mini artifacts. Mini artifacts are only fallback when full artifacts were not provided.
 - Before ending the session, ensure the current task status reflects the actual progress.`;
 
