@@ -16,7 +16,7 @@ const STATUS_ICONS: Record<string, string> = {
 	frozen: '❄️'
 };
 
-const SectionSchema = z.enum(['plan', 'walkthrough', 'metadata', 'history']);
+const SectionSchema = z.enum(['plan', 'walkthrough', 'mcp_context']);
 const StatusFilterSchema = z
 	.string()
 	.trim()
@@ -24,8 +24,6 @@ const StatusFilterSchema = z
 	.max(120)
 	.regex(/^[a-z_,]+$/i, 'Status filter must be comma-separated lowercase values');
 
-const DEFAULT_HISTORY_LIMIT = 3;
-const MAX_HISTORY_LIMIT = 20;
 const DEFAULT_MAX_CHARS = 3500;
 const MAX_ALLOWED_CHARS = 12000;
 const CHAT_ID_HEADER_KEYS = ['x-chat-id', 'x-thread-id', 'x-codex-chat-id', 'x-codex-thread-id'] as const;
@@ -41,7 +39,6 @@ interface ResolveChatTaskBindingResponse {
 }
 
 interface CompactOptions {
-	historyLimit: number;
 	maxChars: number;
 }
 
@@ -225,13 +222,7 @@ function renderTaskSection(
 		return lines.join('\n');
 	}
 
-	if (section === 'history') {
-		lines.push('## History');
-		lines.push('_History has moved to backend audit logs and is no longer returned via task metadata._');
-		return lines.join('\n');
-	}
-
-	// metadata section
+	// mcp_context section
 	lines.push('## MCP Context');
 	lines.push('```json');
 	lines.push(
@@ -253,13 +244,6 @@ export function registerTaskReadTools(server: McpServer): void {
 		'Use at chat/session start to deterministically resolve the active task bound to this chat_id.',
 		{
 			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier used as deterministic binding key'),
-			historyLimit: z
-				.number()
-				.int()
-				.min(1)
-				.max(MAX_HISTORY_LIMIT)
-				.optional()
-				.describe('Max history entries to include when state=bound and context is returned'),
 			maxChars: z
 				.number()
 				.int()
@@ -274,7 +258,7 @@ export function registerTaskReadTools(server: McpServer): void {
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ chat_id, historyLimit, maxChars }, extra) => {
+		async ({ chat_id, maxChars }, extra) => {
 			const startedAt = Date.now();
 			try {
 				if (!chat_id?.trim()) {
@@ -354,7 +338,6 @@ export function registerTaskReadTools(server: McpServer): void {
 				}
 
 				const options: CompactOptions = {
-					historyLimit: clampNumber(historyLimit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
 					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
 				};
 				const compact = renderCompactContext(task, options);
@@ -544,13 +527,6 @@ export function registerTaskReadTools(server: McpServer): void {
 		'Use when the user asks to work on a task and you need a token-efficient context snapshot first.',
 		{
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix like "22b50")'),
-			historyLimit: z
-				.number()
-				.int()
-				.min(1)
-				.max(MAX_HISTORY_LIMIT)
-				.optional()
-				.describe('Max history entries to include (default: 3)'),
 			maxChars: z
 				.number()
 				.int()
@@ -565,7 +541,7 @@ export function registerTaskReadTools(server: McpServer): void {
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId, historyLimit, maxChars }, extra) => {
+		async ({ taskId, maxChars }, extra) => {
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -580,7 +556,6 @@ export function registerTaskReadTools(server: McpServer): void {
 				});
 
 				const options: CompactOptions = {
-					historyLimit: clampNumber(historyLimit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
 					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
 				};
 
@@ -632,17 +607,10 @@ export function registerTaskReadTools(server: McpServer): void {
 
 	server.tool(
 		'get_task_section',
-		'Use when the user only needs one part of the task context (plan, walkthrough, metadata, or history).',
+		'Use when the user only needs one part of the task context (plan, walkthrough, or mcp_context).',
 		{
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix like "22b50")'),
-			section: SectionSchema.describe('Section to retrieve: plan | walkthrough | metadata | history'),
-			historyLimit: z
-				.number()
-				.int()
-				.min(1)
-				.max(MAX_HISTORY_LIMIT)
-				.optional()
-				.describe('Max history entries when section=history (default: 3)'),
+			section: SectionSchema.describe('Section to retrieve: plan | walkthrough | mcp_context'),
 			maxChars: z
 				.number()
 				.int()
@@ -657,7 +625,7 @@ export function registerTaskReadTools(server: McpServer): void {
 			idempotentHint: true,
 			openWorldHint: true
 		},
-		async ({ taskId, section, historyLimit, maxChars }, extra) => {
+		async ({ taskId, section, maxChars }, extra) => {
 			try {
 				const config = requireProject();
 				const projectId = config.currentProjectId;
@@ -672,7 +640,6 @@ export function registerTaskReadTools(server: McpServer): void {
 				});
 
 				const options: CompactOptions = {
-					historyLimit: clampNumber(historyLimit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT),
 					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
 				};
 

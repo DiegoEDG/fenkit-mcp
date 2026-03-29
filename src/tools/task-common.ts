@@ -10,7 +10,6 @@ export interface TaskResponse {
 	assigneeId?: string | null;
 	plan?: string | null;
 	walkthrough?: string | null;
-	implementationMetadata?: Record<string, unknown> | null;
 	mcpContext?: Record<string, unknown> | null;
 	createdBy: string;
 	updatedBy?: string | null;
