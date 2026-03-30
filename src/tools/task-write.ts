@@ -162,11 +162,19 @@ function pickString(value: unknown): string | undefined {
 
 function pickHeaderValue(headers: unknown, keys: string[]): string | undefined {
 	if (!isRecord(headers)) return undefined;
+	
+	// Pre-process headers to be lower-case for easier lookup
+	const lowerHeaders: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(headers)) {
+		lowerHeaders[key.toLowerCase()] = value;
+	}
+
 	for (const key of keys) {
-		const direct = headers[key];
-		if (typeof direct === 'string' && direct.trim().length > 0) return direct.trim();
-		if (Array.isArray(direct)) {
-			const first = direct.find((value) => typeof value === 'string' && value.trim().length > 0);
+		const lowerKey = key.toLowerCase();
+		const value = lowerHeaders[lowerKey];
+		if (typeof value === 'string' && value.trim().length > 0) return value.trim();
+		if (Array.isArray(value)) {
+			const first = value.find((v) => typeof v === 'string' && v.trim().length > 0);
 			if (typeof first === 'string') return first.trim();
 		}
 	}
@@ -181,7 +189,8 @@ function resolveChatContext(options: {
 }): ResolvedChatContext {
 	const headerChatName = pickHeaderValue(options.requestHeaders, ['x-chat-name']);
 	const headerChatId = pickHeaderValue(options.requestHeaders, ['x-chat-id']);
-	const sessionId = pickString(options.sessionId) ?? 'session:unknown';
+	const headerSessionId = pickHeaderValue(options.requestHeaders, ['x-session-id']);
+	const sessionId = pickString(options.sessionId) ?? headerSessionId ?? 'session:unknown';
 	const chatId = pickString(options.chatId) ?? headerChatId ?? `session:${sessionId}`;
 	const chatName = pickString(options.chatName) ?? headerChatName ?? `Chat ${chatId}`;
 
@@ -258,29 +267,6 @@ function resolvePlanLifecycleStatus(currentStatus: string): string {
 	return currentStatus;
 }
 
-async function syncChatTaskBindingHeartbeatFromWrite(options: {
-	projectId: string;
-	taskId: string;
-	status: string;
-	lastTool: string;
-	chatId?: string;
-	requestHeaders?: unknown;
-}): Promise<void> {
-	const resolvedChatId =
-		pickString(options.chatId) ??
-		pickHeaderValue(options.requestHeaders, ['x-chat-id']);
-	if (!resolvedChatId) return;
-
-	const api = getApiClient();
-	await api.post('/mcp/chat-task-bindings/heartbeat', {
-		chat_id: resolvedChatId,
-		project_id: options.projectId,
-		task_id: options.taskId,
-		last_tool: options.lastTool,
-		last_seen_at: new Date().toISOString(),
-		status: options.status
-	});
-}
 
 async function patchTaskWithRetryAndVerification(
 	api: AxiosInstance,
@@ -332,10 +318,10 @@ function buildMcpPayload(options: {
 			last_session_id: options.chatContext.sessionId,
 			last_seen_at: new Date().toISOString(),
 			last_model: options.model,
-			git_branch: options.gitContext?.branch ?? null,
-			git_commit_hash: options.gitContext?.commitHash ?? null,
-			git_remote_url: options.gitContext?.remoteUrl ?? null,
-			git_status: options.gitContext?.status ?? null
+			git_branch: options.gitContext?.branch ?? undefined,
+			git_commit_hash: options.gitContext?.commitHash ?? undefined,
+			git_remote_url: options.gitContext?.remoteUrl ?? undefined,
+			git_status: options.gitContext?.status ?? undefined
 		},
 		mcpEvent: {
 			tool: options.toolName,
@@ -368,7 +354,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete plan already exists.'),
 			model: z.string().trim().min(1).max(120).describe('Model name used for this plan (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -505,14 +491,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 						persistedTask.status === targetStatus
 				);
 
-				await syncChatTaskBindingHeartbeatFromWrite({
-					projectId,
-					taskId: currentTask.id,
-					status: targetStatus,
-					lastTool: 'update_task_plan',
-					chatId: chat_id,
-					requestHeaders: extra.requestInfo?.headers
-				});
 
 				trackToolCall({
 					tool: 'update_task_plan',
@@ -568,7 +546,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete walkthrough already exists.'),
 			model: z.string().trim().min(1).max(120).describe('Model name used for this walkthrough (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -703,14 +681,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 						persistedTask.status === 'in_review'
 				);
 
-				await syncChatTaskBindingHeartbeatFromWrite({
-					projectId,
-					taskId: currentTask.id,
-					status: 'in_review',
-					lastTool: 'update_task_walkthrough',
-					chatId: chat_id,
-					requestHeaders: extra.requestInfo?.headers
-				});
 
 				trackToolCall({
 					tool: 'update_task_walkthrough',
@@ -765,7 +735,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			model: z.string().trim().min(1).max(120).describe('Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -890,14 +860,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 					(persistedTask) => persistedTask.status === status
 				);
 
-				await syncChatTaskBindingHeartbeatFromWrite({
-					projectId,
-					taskId: currentTask.id,
-					status,
-					lastTool: 'set_task_status',
-					chatId: chat_id,
-					requestHeaders: extra.requestInfo?.headers
-				});
 
 				trackToolCall({
 					tool: 'set_task_status',
@@ -948,7 +910,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			model: z.string().trim().min(1).max(120).describe('Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
 			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
+			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -1073,14 +1035,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 					(persistedTask) => persistedTask.priority === priority
 				);
 
-				await syncChatTaskBindingHeartbeatFromWrite({
-					projectId,
-					taskId: currentTask.id,
-					status: currentTask.status,
-					lastTool: 'set_task_priority',
-					chatId: chat_id,
-					requestHeaders: extra.requestInfo?.headers
-				});
 
 				trackToolCall({
 					tool: 'set_task_priority',

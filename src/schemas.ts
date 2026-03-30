@@ -52,10 +52,10 @@ export type Walkthrough = z.infer<typeof WalkthroughSchema>;
 
 // --- PRD 8.3: Execution Metadata Schema ---
 export const TokensSchema = z.object({
-  input: z.number().optional().describe('Input tokens used'),
-  output: z.number().optional().describe('Output tokens used'),
-  total: z.number().optional().describe('Total tokens used'),
-  estimate: z.number().optional().describe('Estimated token count'),
+  input: z.number().optional().describe('Cumulative input tokens used for this entire chat session'),
+  output: z.number().optional().describe('Cumulative output tokens used for this entire chat session'),
+  total: z.number().optional().describe('Cumulative total tokens used for this entire chat session'),
+  estimate: z.number().optional().describe('Estimated cumulative token count'),
 }).strict();
 
 // --- Session Summary Schema (PRD 4.2) ---
