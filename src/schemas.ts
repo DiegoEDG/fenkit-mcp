@@ -57,24 +57,6 @@ export const TokensSchema = z.object({
   total: z.number().optional().describe('Total tokens used'),
   estimate: z.number().optional().describe('Estimated token count'),
 }).strict();
-export const TokenSourceSchema = z
-  .enum(['exact', 'estimate', 'mixed'])
-  .optional()
-  .describe('How token values were produced: exact from client, estimate fallback, or mixed.');
-
-export const ExecutionMetadataSchema = z.object({
-  durationMs: z.number().optional().describe('Time spent in milliseconds'),
-  agent: z.string().trim().min(1).max(80).optional().describe('Agent/client name (e.g. cursor, claude-desktop)'),
-  model: z.string().trim().min(1).max(120).optional().describe('Model identifier (e.g. gpt-4.1, claude-sonnet)'),
-  provider: z.string().trim().min(1).max(80).optional().describe('Provider name (e.g. openai, anthropic)'),
-  tokens: TokensSchema.optional().describe('Token usage'),
-  token_source: TokenSourceSchema,
-  chat_id: z.string().trim().min(1).max(120).optional().describe('Chat/thread identifier from the AI client'),
-  chat_name: z.string().trim().min(1).max(160).optional().describe('Chat/thread display name from the AI client'),
-  session_id: z.string().trim().min(1).max(120).optional().describe('MCP transport session identifier'),
-  timestamp: z.string().trim().min(1).max(60).optional().describe('ISO-8601 timestamp'),
-}).strict();
-export type ExecutionMetadata = z.infer<typeof ExecutionMetadataSchema>;
 
 // --- Session Summary Schema (PRD 4.2) ---
 export const SessionSummarySchema = z.object({

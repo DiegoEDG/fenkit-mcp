@@ -121,14 +121,14 @@ export function registerProjectTools(server: McpServer): void {
         .min(1)
         .max(120)
         .optional()
-        .describe('Model used (execution metadata)'),
+        .describe('Model used (MCP event metadata)'),
       agent: z
         .string()
         .trim()
         .min(1)
         .max(80)
         .optional()
-        .describe('Agent/client name (execution metadata)'),
+        .describe('Agent/client name (MCP event metadata)'),
       tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
       mode: z
         .enum(['preview', 'execute'])

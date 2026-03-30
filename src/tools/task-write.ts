@@ -741,7 +741,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			status: TaskStatusSchema.describe('New status: todo, in_progress, in_review, backlog, frozen'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
-			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for execution metadata. Auto-derived from headers or defaults.'),
+			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for MCP event metadata. Auto-derived from headers or defaults.'),
 			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
@@ -922,7 +922,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			priority: TaskPrioritySchema.describe('New priority: low, medium, high, urgent'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
-			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for execution metadata. Auto-derived from headers or defaults.'),
+			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for MCP event metadata. Auto-derived from headers or defaults.'),
 			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z

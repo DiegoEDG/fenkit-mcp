@@ -11,8 +11,7 @@
 - Auth/session tools: `login`, `get_status`
 - Project tools: `list_projects`, `get_active_project`, `select_project`
 - Task read tools: `list_tasks`, `search_tasks`, `get_task_context_compact`, `get_task_context_full`, `get_task_section`
-- Backward-compatible alias: `get_full_task` (deprecated)
-- Task write tools with execution metadata: `update_task_plan`, `update_task_walkthrough`, `update_task_metadata`
+- Task write tools with MCP metadata payloads (`mcpContext` + `mcpEvent`): `update_task_plan`, `update_task_walkthrough`, `set_task_status`, `set_task_priority`
 
 ### Setup & onboarding
 - One-command setup for: Claude Desktop, Cursor, Windsurf, Claude Code, Codex, and Antigravity.
