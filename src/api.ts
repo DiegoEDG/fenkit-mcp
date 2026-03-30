@@ -16,13 +16,49 @@ export function createApiClient(options: { apiUrl: string; token: string }): Axi
     timeout: 15000,
   });
 
+  const FORBIDDEN_METADATA_KEYS = [
+    'implementationMetadata',
+    'executionMetadata',
+    'execution_metadata',
+    'lastExecution',
+    'history',
+  ];
+
+  function sanitizeObject(obj: any): any {
+    if (Array.isArray(obj)) {
+      return obj.map(sanitizeObject);
+    }
+    if (obj !== null && typeof obj === 'object') {
+      const sanitized: Record<string, any> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (!FORBIDDEN_METADATA_KEYS.includes(key)) {
+          sanitized[key] = sanitizeObject(value);
+        }
+      }
+      return sanitized;
+    }
+    return obj;
+  }
+
   nextClient.interceptors.request.use((requestConfig) => {
     const baseUrl = requestConfig.baseURL ?? validatedApi.url;
     const requestUrl = requestConfig.url ?? '/';
     const absoluteUrl = new URL(requestUrl, baseUrl);
 
     if (!isAllowedApiOrigin(absoluteUrl.origin)) {
-      throw new Error(`Blocked request to non-allowed API origin: ${absoluteUrl.origin}`);
+      throw new Error(
+        `Blocked request to non-allowed API origin: ${absoluteUrl.origin}`,
+      );
+    }
+
+    // Sanitize data (body)
+    if (requestConfig.data) {
+      requestConfig.data = sanitizeObject(requestConfig.data);
+    }
+
+    // Sanitize params (query string)
+    if (requestConfig.params) {
+      requestConfig.params = sanitizeObject(requestConfig.params);
     }
 
     return requestConfig;
