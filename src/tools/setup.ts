@@ -13,7 +13,7 @@ You are an AI agent with access to the Fenkit platform. Follow this protocol for
 ### 1. Orientation & Session Start
 - **Always** call \`get_status\` at the beginning of a session to verify authentication and active project.
 - If no project is active, call \`list_projects\` and ask the user to select one, or try to auto-select if you're in a known repository.
-- If \`chat_id\` is available, call \`resolve_chat_task(chat_id)\` before loading task context:
+- If \`chat_id\` is available, call \`resolve_session_task(chat_id)\` before loading task context:
   - \`bound\` → continue with returned task context.
   - \`unbound\` → continue with explicit task selection.
   - \`needs_confirmation\` → ask user to confirm next task; do not silently auto-bind.

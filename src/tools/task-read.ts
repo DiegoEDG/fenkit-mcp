@@ -22,7 +22,7 @@ const StatusFilterSchema = z
 
 const CHAT_ID_HEADER_KEYS = ['x-chat-id'] as const;
 
-interface ResolveChatTaskBindingResponse {
+interface ResolveSessionResponse {
 	state: 'bound' | 'unbound' | 'needs_confirmation';
 	project_id?: string;
 	task_id?: string;
@@ -71,7 +71,8 @@ async function syncChatTaskBindingHeartbeat(options: {
 	const chatId = options.chatId ?? getHeaderString(options.headers, CHAT_ID_HEADER_KEYS);
 	if (!chatId) return;
 	const api = getApiClient();
-	await api.post('/mcp/chat-task-bindings/heartbeat', {
+	await api.post('/mcp/task-sessions/heartbeat', {
+		session_id: `${chatId}_${options.task.id}`,
 		chat_id: chatId,
 		project_id: options.projectId,
 		task_id: options.task.id,
@@ -94,7 +95,7 @@ async function fetchTasksByStatus(projectId: string, statusFilter: string): Prom
  */
 export function registerTaskReadTools(server: McpServer): void {
 	server.tool(
-		'resolve_chat_task',
+		'resolve_session_task',
 		'Use at chat/session start to deterministically resolve the active task bound to this chat_id.',
 		{
 			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier used as deterministic binding key'),
@@ -120,7 +121,7 @@ export function registerTaskReadTools(server: McpServer): void {
 						content: [
 							{
 								type: 'text' as const,
-								text: 'CHAT_ID_REQUIRED: resolve_chat_task requires a non-empty chat_id. Explicitly select a task and bind it via normal task tools once chat_id is available.'
+								text: 'CHAT_ID_REQUIRED: resolve_session_task requires a non-empty chat_id. Explicitly select a task and bind it via normal task tools once chat_id is available.'
 							}
 						],
 						isError: true
@@ -128,13 +129,13 @@ export function registerTaskReadTools(server: McpServer): void {
 				}
 
 				const api = getApiClient();
-				const { data } = await api.get<ResolveChatTaskBindingResponse>('/mcp/chat-task-bindings/resolve', {
+				const { data } = await api.get<ResolveSessionResponse>('/mcp/task-sessions/resolve', {
 					params: { chat_id }
 				});
 
 				if (data.state === 'unbound') {
 					trackToolCall({
-						tool: 'resolve_chat_task',
+						tool: 'resolve_session_task',
 						input: { chat_id },
 						output: { state: 'unbound' },
 						latencyMs: Date.now() - startedAt,
@@ -143,13 +144,15 @@ export function registerTaskReadTools(server: McpServer): void {
 						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 					});
 					return {
-						content: [{ type: 'text' as const, text: `## Chat Task Resolution\n\n- state: unbound\n- chat_id: ${chat_id}` }]
+						content: [
+							{ type: 'text' as const, text: `## Chat Task Resolution\n\n- state: unbound\n- chat_id: ${chat_id}` }
+						]
 					};
 				}
 
 				if (data.state === 'needs_confirmation') {
 					trackToolCall({
-						tool: 'resolve_chat_task',
+						tool: 'resolve_session_task',
 						input: { chat_id },
 						output: { state: 'needs_confirmation', reason: data.reason },
 						latencyMs: Date.now() - startedAt,
@@ -175,7 +178,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				await syncChatTaskBindingHeartbeat({
 					projectId: data.project_id,
 					task,
-					tool: 'resolve_chat_task',
+					tool: 'resolve_session_task',
 					chatId: chat_id,
 					headers: extra.requestInfo?.headers
 				});
@@ -196,7 +199,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				};
 				const compact = renderCompactContext(task, options);
 				trackToolCall({
-					tool: 'resolve_chat_task',
+					tool: 'resolve_session_task',
 					input: { chat_id },
 					output: { state: 'bound', project_id: data.project_id, task_id: data.task_id },
 					latencyMs: Date.now() - startedAt,
@@ -214,7 +217,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				};
 			} catch (error) {
 				trackToolCall({
-					tool: 'resolve_chat_task',
+					tool: 'resolve_session_task',
 					input: { chat_id },
 					error: error instanceof Error ? error.message : String(error),
 					latencyMs: Date.now() - startedAt,
@@ -232,19 +235,17 @@ export function registerTaskReadTools(server: McpServer): void {
 		'list_tasks',
 		'Use when the user asks to see tasks in the active project, optionally filtered by status.',
 		{
-			status: StatusFilterSchema
-				.optional()
-				.describe(
-					'Comma-separated status filter (e.g. "todo,in_progress"). Default: "todo,in_progress,in_review". Options: todo, in_progress, in_review, done, backlog, frozen'
-					)
-			},
-			{
-				readOnlyHint: true,
-				destructiveHint: false,
-				idempotentHint: true,
-				openWorldHint: true
-			},
-			async ({ status }, extra) => {
+			status: StatusFilterSchema.optional().describe(
+				'Comma-separated status filter (e.g. "todo,in_progress"). Default: "todo,in_progress,in_review". Options: todo, in_progress, in_review, done, backlog, frozen'
+			)
+		},
+		{
+			readOnlyHint: true,
+			destructiveHint: false,
+			idempotentHint: true,
+			openWorldHint: true
+		},
+		async ({ status }, extra) => {
 			const startedAt = Date.now();
 			try {
 				const config = requireProject();
@@ -387,7 +388,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				.min(500)
 				.max(MAX_ALLOWED_CHARS)
 				.optional()
-					.describe('Max chars for long text fields (default: 3500)')
+				.describe('Max chars for long text fields (default: 3500)')
 		},
 		{
 			readOnlyHint: true,
@@ -471,7 +472,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				.min(500)
 				.max(MAX_ALLOWED_CHARS)
 				.optional()
-					.describe('Max chars for section payload (default: 3500)')
+				.describe('Max chars for section payload (default: 3500)')
 		},
 		{
 			readOnlyHint: true,

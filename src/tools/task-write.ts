@@ -136,6 +136,7 @@ interface TokenTotals {
 
 interface ResolvedChatContext {
 	chatId: string;
+	sessionId: string;
 }
 
 interface ConfirmationMeta {
@@ -175,12 +176,13 @@ function pickHeaderValue(headers: unknown, keys: string[]): string | undefined {
 	return undefined;
 }
 
-function resolveChatContext(options: { chatId?: string; requestHeaders?: unknown }): ResolvedChatContext {
+function resolveChatContext(options: { chatId?: string; taskId: string; requestHeaders?: unknown }): ResolvedChatContext {
 	const headerChatId = pickHeaderValue(options.requestHeaders, ['x-chat-id']);
 	const headerSessionId = pickHeaderValue(options.requestHeaders, ['x-session-id']);
 	const chatId = pickString(options.chatId) ?? headerChatId ?? headerSessionId ?? 'session:unknown';
+	const sessionId = `${chatId}_${options.taskId}`;
 
-	return { chatId };
+	return { chatId, sessionId };
 }
 
 function resolveAgentName(options: { agent?: string; requestHeaders?: unknown }): string {
@@ -290,7 +292,8 @@ function buildMcpPayload(options: {
 		mcpContext: {
 			actor: options.agent,
 			tool: options.toolName,
-			last_chat_id: options.chatContext.chatId,
+			chat_id: options.chatContext.chatId,
+			session_id: options.chatContext.sessionId,
 			last_seen_at: new Date().toISOString(),
 			last_model: options.model,
 			git_branch: options.gitContext?.branch ?? undefined,
@@ -394,6 +397,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
+					taskId: currentTask.id,
 					requestHeaders: extra.requestInfo?.headers
 				});
 				if (resolvedExecutionMode === 'preview') {
@@ -595,7 +599,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
-
+					taskId: currentTask.id,
 					requestHeaders: extra.requestInfo?.headers
 				});
 				if (resolvedExecutionMode === 'preview') {
@@ -834,6 +838,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
+					taskId: currentTask.id,
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ status }), tokens);
@@ -942,17 +947,11 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.trim()
 				.min(1)
 				.max(120)
-				.describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
-			chat_name: z
-				.string()
-				.trim()
-				.min(1)
-				.max(160)
-				.describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
+				.describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
-			{ taskId, priority, operation_id, model, agent, tokens, execution_mode, confirmation_token, chat_id, chat_name },
+			{ taskId, priority, operation_id, model, agent, tokens, execution_mode, confirmation_token, chat_id },
 			extra
 		) => {
 			const startedAt = Date.now();
@@ -1019,6 +1018,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
+					taskId: currentTask.id,
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ priority }), tokens);
