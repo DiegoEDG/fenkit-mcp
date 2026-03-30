@@ -6,6 +6,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-v18+-green?style=for-the-badge)](https://nodejs.org)
 [![Version](https://img.shields.io/badge/version-1.2.0-blue?style=for-the-badge)](https://www.npmjs.com/package/fenkit-mcp)
 [![License](https://img.shields.io/badge/license-MIT-purple?style=for-the-badge)](LICENSE)
+[![Test Badge](https://img.shields.io/badge/fenkit-ok-brightgreen?style=for-the-badge)](https://github.com/DiegoEDG/fenkit-mcp)
 
 Fenkit MCP conecta tus agentes AI con **Fenkit**, tu centro de comando. Transforma SDD en progreso real y documentación estructurada sin mover un solo dedo.
 

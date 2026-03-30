@@ -61,6 +61,10 @@ export function createApiClient(options: { apiUrl: string; token: string }): Axi
       requestConfig.params = sanitizeObject(requestConfig.params);
     }
 
+    console.error('[DEBUG Axios Interceptor] Method:', requestConfig.method, 'URL:', requestConfig.url);
+    if (requestConfig.data) console.error('[DEBUG Axios Interceptor] Data:', JSON.stringify(requestConfig.data));
+    if (requestConfig.params) console.error('[DEBUG Axios Interceptor] Params:', JSON.stringify(requestConfig.params));
+
     return requestConfig;
   });
 
