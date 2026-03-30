@@ -4,7 +4,7 @@
 
 [![MCP](https://img.shields.io/badge/Model_Context_Protocol-SDK-orange?style=for-the-badge)](https://modelcontextprotocol.io)
 [![Node.js](https://img.shields.io/badge/Node.js-v18+-green?style=for-the-badge)](https://nodejs.org)
-[![Version](https://img.shields.io/badge/version-1.2.0-blue?style=for-the-badge)](https://www.npmjs.com/package/fenkit-mcp)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue?style=for-the-badge)](https://www.npmjs.com/package/fenkit-mcp)
 [![License](https://img.shields.io/badge/license-MIT-purple?style=for-the-badge)](LICENSE)
 [![Test Badge](https://img.shields.io/badge/fenkit-ok-brightgreen?style=for-the-badge)](https://github.com/DiegoEDG/fenkit-mcp)
 
@@ -24,12 +24,14 @@ sequenceDiagram
     participant B as Fenkit Backend
 
     U->>A: "Trabaja en la tarea #42"
-    A->>M: list_tasks()
-    M->>A: Contexto completo de la tarea
-    Note over A: El agente piensa y ejecuta (Con tu aprobación)
+    Note over A: El agente obtiene chat_id del contexto
+    A->>M: resolve_session_task(chat_id)
+    M->>A: Contexto determinista (Tarea vinculada)
+    Note over A: El agente piensa y ejecuta
+    A->>M: update_task_plan()
     A->>M: update_task_walkthrough()
     A->>M: set_task_status("In Review")
-    M->>B: Sync en tiempo real
+    M->>B: Sync en tiempo real + Metadatos (Git, Model, Agent)
     B->>U: Notificación: Tarea Finalizada ✅
 ```
 
@@ -37,7 +39,7 @@ sequenceDiagram
 
 ## ⚡ Activación en 30 Segundos
 
-Despliega el poder de Fenkit en tu cliente favorito con un solo comando:
+Despliega el poder de Fenkit en tu cliente favorito con un solo comando. Ahora con el alias `fnk` disponible.
 
 ```bash
 npx -y fenkit-mcp setup <client>
@@ -59,10 +61,12 @@ npx -y fenkit-mcp setup <client>
 
 | Característica | Prompting Manual | Con Fenkit MCP |
 | :--- | :--- | :--- |
+| **Orientación** | Manual / Olvidos | **Determinista** (`resolve_session_task`) |
 | **Contexto** | Fragmentado | Siempre sincrónico |
-| **Documentación** | "Luego lo escribo" (Nunca pasa) | Automática: Plan + Walkthrough |
+| **Documentación** | "Luego lo escribo" | Automática: Plan + Walkthrough |
+| **Metadatos** | Inexistentes | Git, Model, Agent, Tokens |
 | **Visibilidad** | Caja negra | Métricas y progreso en vivo |
-| **Esfuerzo** | Alto (Copy-Paste infinito) | **Cero** (Auto-invoke) |
+| **Esfuerzo** | Alto (Copy-Paste) | **Cero** (Auto-invoke) |
 
 ---
 
@@ -82,7 +86,7 @@ Al eliminar el caos administrativo, Fenkit genera de forma autónoma:
 
 Nuestras herramientas están diseñadas para que el agente tenga autonomía total:
 
-- 🔐 **Auth:** `login`, `get_status` - Seguridad robusta en cada interacción.
+- 🔐 **Auth/Admin:** `login`, `get_status`, `setup_client` - Seguridad y configuración.
 - 📂 **Proyectos:** `list_projects`, `select_project` - Navegación inteligente.
 - 📝 **Tareas:** `list_tasks`, `get_task_context_compact` - Foco en lo que importa.
 - 🚀 **Escritura:** `update_task_plan`, `update_task_walkthrough`, `set_task_status`, `set_task_priority` - Documentación y lifecycle determinista.
