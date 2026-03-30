@@ -16,6 +16,7 @@ import {
 } from '../schemas.js';
 import { resolveTaskByIdentifier } from './task-common.js';
 import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observability.js';
+import { getGitMetadata } from '../git.js';
 import {
 	consumeConfirmationToken,
 	isSensitiveConfirmationEnabled,
@@ -116,6 +117,13 @@ const WRITE_RETRY_ATTEMPTS = 3;
 const WRITE_RETRY_BACKOFF_MS = 250;
 const DEFAULT_AGENT = 'mcp-client';
 const DEFAULT_MODEL = 'unknown';
+
+interface GitContext {
+	branch: string | null;
+	commitHash: string | null;
+	remoteUrl: string | null;
+	status: string;
+}
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -313,6 +321,7 @@ function buildMcpPayload(options: {
 	changedFields: string[];
 	requestHeaders?: unknown;
 	confirmation?: ConfirmationMeta;
+	gitContext?: GitContext;
 }): { mcpContext: Record<string, unknown>; mcpEvent: Record<string, unknown> } {
 	return {
 		mcpContext: {
@@ -321,7 +330,12 @@ function buildMcpPayload(options: {
 			last_chat_id: options.chatContext.chatId,
 			last_chat_name: options.chatContext.chatName,
 			last_session_id: options.chatContext.sessionId,
-			last_seen_at: new Date().toISOString()
+			last_seen_at: new Date().toISOString(),
+			last_model: options.model,
+			git_branch: options.gitContext?.branch ?? null,
+			git_commit_hash: options.gitContext?.commitHash ?? null,
+			git_remote_url: options.gitContext?.remoteUrl ?? null,
+			git_status: options.gitContext?.status ?? null
 		},
 		mcpEvent: {
 			tool: options.toolName,
@@ -352,8 +366,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			plan: PlanSchema,
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete plan already exists.'),
-			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for this plan. Auto-derived from headers or defaults.'),
-			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
+			model: z.string().trim().min(1).max(120).describe('Model name used for this plan (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -366,8 +380,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
-			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
+			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
+			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
@@ -463,6 +477,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					});
 				}
 
+				const gitContext = getGitMetadata();
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_plan',
 					operationId: resolvedOperationId,
@@ -475,7 +490,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					changedFields: shouldMoveToInProgress ? ['plan', 'status'] : ['plan'],
 					requestHeaders: extra.requestInfo?.headers,
-					confirmation: confirmationMeta
+					confirmation: confirmationMeta,
+					gitContext
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -550,8 +566,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			walkthrough: WalkthroughSchema,
 			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete walkthrough already exists.'),
-			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for this walkthrough. Auto-derived from headers or defaults.'),
-			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
+			model: z.string().trim().min(1).max(120).describe('Model name used for this walkthrough (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -564,8 +580,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
-			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
+			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
+			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
@@ -659,6 +675,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					});
 				}
 
+				const gitContext = getGitMetadata();
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_walkthrough',
 					operationId: resolvedOperationId,
@@ -671,7 +688,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['status', 'walkthrough'],
 					requestHeaders: extra.requestInfo?.headers,
-					confirmation: confirmationMeta
+					confirmation: confirmationMeta,
+					gitContext
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -745,8 +763,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			status: TaskStatusSchema.describe('New status: todo, in_progress, in_review, backlog, frozen'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
-			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for MCP event metadata. Auto-derived from headers or defaults.'),
-			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
+			model: z.string().trim().min(1).max(120).describe('Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -759,8 +777,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
-			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
+			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
+			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
@@ -847,6 +865,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ status }), tokens);
+				const gitContext = getGitMetadata();
 				const mcpPayload = buildMcpPayload({
 					toolName: 'set_task_status',
 					operationId: resolvedOperationId,
@@ -859,7 +878,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['status'],
 					requestHeaders: extra.requestInfo?.headers,
-					confirmation: confirmationMeta
+					confirmation: confirmationMeta,
+					gitContext
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -926,8 +946,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			priority: TaskPrioritySchema.describe('New priority: low, medium, high, urgent'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
-			model: z.string().trim().min(1).max(120).optional().describe('Optional model used for MCP event metadata. Auto-derived from headers or defaults.'),
-			agent: z.string().trim().min(1).max(80).optional().describe('Optional agent/client name. Auto-derived from headers or defaults.'),
+			model: z.string().trim().min(1).max(120).describe('Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
+			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
 			tokens: TokensSchema.optional().describe('Optional token usage for this write operation'),
 			execution_mode: z
 				.enum(['preview', 'execute'])
@@ -940,8 +960,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).optional().describe('Optional chat/thread identifier'),
-			chat_name: z.string().trim().min(1).max(160).optional().describe('Optional chat/thread display name')
+			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
+			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
@@ -1028,6 +1048,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ priority }), tokens);
+				const gitContext = getGitMetadata();
 				const mcpPayload = buildMcpPayload({
 					toolName: 'set_task_priority',
 					operationId: resolvedOperationId,
@@ -1040,7 +1061,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['priority'],
 					requestHeaders: extra.requestInfo?.headers,
-					confirmation: confirmationMeta
+					confirmation: confirmationMeta,
+					gitContext
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
