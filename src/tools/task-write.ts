@@ -17,11 +17,7 @@ import {
 import { resolveTaskByIdentifier } from './task-common.js';
 import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observability.js';
 import { getGitMetadata } from '../git.js';
-import {
-	consumeConfirmationToken,
-	isSensitiveConfirmationEnabled,
-	issueConfirmationToken
-} from '../confirmation.js';
+import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../confirmation.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
 	const lines: string[] = [];
@@ -140,8 +136,6 @@ interface TokenTotals {
 
 interface ResolvedChatContext {
 	chatId: string;
-	chatName: string;
-	sessionId: string;
 }
 
 interface ConfirmationMeta {
@@ -162,7 +156,7 @@ function pickString(value: unknown): string | undefined {
 
 function pickHeaderValue(headers: unknown, keys: string[]): string | undefined {
 	if (!isRecord(headers)) return undefined;
-	
+
 	// Pre-process headers to be lower-case for easier lookup
 	const lowerHeaders: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(headers)) {
@@ -181,36 +175,20 @@ function pickHeaderValue(headers: unknown, keys: string[]): string | undefined {
 	return undefined;
 }
 
-function resolveChatContext(options: {
-	chatId?: string;
-	chatName?: string;
-	sessionId?: string;
-	requestHeaders?: unknown;
-}): ResolvedChatContext {
-	const headerChatName = pickHeaderValue(options.requestHeaders, ['x-chat-name']);
+function resolveChatContext(options: { chatId?: string; requestHeaders?: unknown }): ResolvedChatContext {
 	const headerChatId = pickHeaderValue(options.requestHeaders, ['x-chat-id']);
 	const headerSessionId = pickHeaderValue(options.requestHeaders, ['x-session-id']);
-	const sessionId = pickString(options.sessionId) ?? headerSessionId ?? 'session:unknown';
-	const chatId = pickString(options.chatId) ?? headerChatId ?? `session:${sessionId}`;
-	const chatName = pickString(options.chatName) ?? headerChatName ?? `Chat ${chatId}`;
+	const chatId = pickString(options.chatId) ?? headerChatId ?? headerSessionId ?? 'session:unknown';
 
-	return { chatId, chatName, sessionId };
+	return { chatId };
 }
 
 function resolveAgentName(options: { agent?: string; requestHeaders?: unknown }): string {
-	return (
-		pickString(options.agent) ??
-		pickHeaderValue(options.requestHeaders, ['x-agent']) ??
-		DEFAULT_AGENT
-	);
+	return pickString(options.agent) ?? pickHeaderValue(options.requestHeaders, ['x-agent']) ?? DEFAULT_AGENT;
 }
 
 function resolveModelName(options: { model?: string; requestHeaders?: unknown }): string {
-	return (
-		pickString(options.model) ??
-		pickHeaderValue(options.requestHeaders, ['x-model']) ??
-		DEFAULT_MODEL
-	);
+	return pickString(options.model) ?? pickHeaderValue(options.requestHeaders, ['x-model']) ?? DEFAULT_MODEL;
 }
 
 function resolveOperationId(options: { operationId?: string; toolName: string }): string {
@@ -267,7 +245,6 @@ function resolvePlanLifecycleStatus(currentStatus: string): string {
 	return currentStatus;
 }
 
-
 async function patchTaskWithRetryAndVerification(
 	api: AxiosInstance,
 	projectId: string,
@@ -314,8 +291,6 @@ function buildMcpPayload(options: {
 			actor: options.agent,
 			tool: options.toolName,
 			last_chat_id: options.chatContext.chatId,
-			last_chat_name: options.chatContext.chatName,
-			last_session_id: options.chatContext.sessionId,
 			last_seen_at: new Date().toISOString(),
 			last_model: options.model,
 			git_branch: options.gitContext?.branch ?? undefined,
@@ -351,10 +326,28 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			plan: PlanSchema,
-			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete plan already exists.'),
-			model: z.string().trim().min(1).max(120).describe('Model name used for this plan (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
+			mode: ArtifactModeSchema.optional().describe(
+				'Optional artifact mode: "mini" fallback or "full" when a complete plan already exists.'
+			),
+			model: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe(
+					'Model name used for this plan (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'
+				),
+			agent: z
+				.string()
+				.trim()
+				.min(1)
+				.max(80)
+				.describe(
+					'Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'
+				),
+			tokens: TokensSchema.optional().describe(
+				'Optional cumulative token usage for this entire chat session up to this point'
+			),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -366,24 +359,16 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
-			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
+			chat_id: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
-			{
-				taskId,
-				operation_id,
-				plan,
-				mode,
-				model,
-				agent,
-				tokens,
-				execution_mode,
-				confirmation_token,
-				chat_id,
-				chat_name
-			},
+			{ taskId, operation_id, plan, mode, model, agent, tokens, execution_mode, confirmation_token, chat_id },
 			extra
 		) => {
 			const startedAt = Date.now();
@@ -409,8 +394,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
-					chatName: chat_name,
-					sessionId: extra.sessionId,
 					requestHeaders: extra.requestInfo?.headers
 				});
 				if (resolvedExecutionMode === 'preview') {
@@ -491,16 +474,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 						persistedTask.status === targetStatus
 				);
 
-
 				trackToolCall({
 					tool: 'update_task_plan',
 					input: { taskId, operation_id: resolvedOperationId, mode: artifactMode },
 					output: { steps: parsed.steps.length, files: parsed.files_affected.length },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
-					sessionId: chatContext.sessionId,
 					chatId: chatContext.chatId,
-					chatName: chatContext.chatName,
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 
@@ -522,7 +502,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 				});
 				if (error instanceof z.ZodError) {
 					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
-					return { content: [{ type: 'text' as const, text: `INVALID_INPUT: Plan validation failed:\n${issues}` }], isError: true };
+					return {
+						content: [{ type: 'text' as const, text: `INVALID_INPUT: Plan validation failed:\n${issues}` }],
+						isError: true
+					};
 				}
 				const err = formatApiError(error);
 				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
@@ -543,10 +526,28 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
 			walkthrough: WalkthroughSchema,
-			mode: ArtifactModeSchema.optional().describe('Optional artifact mode: "mini" fallback or "full" when a complete walkthrough already exists.'),
-			model: z.string().trim().min(1).max(120).describe('Model name used for this walkthrough (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
+			mode: ArtifactModeSchema.optional().describe(
+				'Optional artifact mode: "mini" fallback or "full" when a complete walkthrough already exists.'
+			),
+			model: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe(
+					'Model name used for this walkthrough (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'
+				),
+			agent: z
+				.string()
+				.trim()
+				.min(1)
+				.max(80)
+				.describe(
+					'Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'
+				),
+			tokens: TokensSchema.optional().describe(
+				'Optional cumulative token usage for this entire chat session up to this point'
+			),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -558,24 +559,16 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
-			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
+			chat_id: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
-			{
-				taskId,
-				operation_id,
-				walkthrough,
-				mode,
-				model,
-				agent,
-				tokens,
-				execution_mode,
-				confirmation_token,
-				chat_id,
-				chat_name
-			},
+			{ taskId, operation_id, walkthrough, mode, model, agent, tokens, execution_mode, confirmation_token, chat_id },
 			extra
 		) => {
 			const startedAt = Date.now();
@@ -585,7 +578,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const artifactMode = mode ?? 'mini';
 				const resolvedTokens = resolveTokens(walkthroughContent, tokens);
 				const payloadHash = stableHash({ walkthrough: parsed, mode: artifactMode });
-				const resolvedOperationId = resolveOperationId({ operationId: operation_id, toolName: 'update_task_walkthrough' });
+				const resolvedOperationId = resolveOperationId({
+					operationId: operation_id,
+					toolName: 'update_task_walkthrough'
+				});
 				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
 				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 
@@ -599,8 +595,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
-					chatName: chat_name,
-					sessionId: extra.sessionId,
+
 					requestHeaders: extra.requestInfo?.headers
 				});
 				if (resolvedExecutionMode === 'preview') {
@@ -681,16 +676,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 						persistedTask.status === 'in_review'
 				);
 
-
 				trackToolCall({
 					tool: 'update_task_walkthrough',
 					input: { taskId, operation_id: resolvedOperationId, mode: artifactMode },
 					output: { changes: parsed.changes.length, files: parsed.files_modified.length },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
-					sessionId: chatContext.sessionId,
 					chatId: chatContext.chatId,
-					chatName: chatContext.chatName,
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 
@@ -712,7 +704,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 				});
 				if (error instanceof z.ZodError) {
 					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
-					return { content: [{ type: 'text' as const, text: `INVALID_INPUT: Walkthrough validation failed:\n${issues}` }], isError: true };
+					return {
+						content: [{ type: 'text' as const, text: `INVALID_INPUT: Walkthrough validation failed:\n${issues}` }],
+						isError: true
+					};
 				}
 				const err = formatApiError(error);
 				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
@@ -733,9 +728,25 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			status: TaskStatusSchema.describe('New status: todo, in_progress, in_review, backlog, frozen'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
-			model: z.string().trim().min(1).max(120).describe('Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
+			model: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe(
+					'Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'
+				),
+			agent: z
+				.string()
+				.trim()
+				.min(1)
+				.max(80)
+				.describe(
+					'Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'
+				),
+			tokens: TokensSchema.optional().describe(
+				'Optional cumulative token usage for this entire chat session up to this point'
+			),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -747,23 +758,16 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
-			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
+			chat_id: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
-			{
-				taskId,
-				status,
-				operation_id,
-				model,
-				agent,
-				tokens,
-				execution_mode,
-				confirmation_token,
-				chat_id,
-				chat_name
-			},
+			{ taskId, status, operation_id, model, agent, tokens, execution_mode, confirmation_token, chat_id },
 			extra
 		) => {
 			const startedAt = Date.now();
@@ -830,8 +834,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
-					chatName: chat_name,
-					sessionId: extra.sessionId,
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ status }), tokens);
@@ -860,16 +862,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 					(persistedTask) => persistedTask.status === status
 				);
 
-
 				trackToolCall({
 					tool: 'set_task_status',
 					input: { taskId, status, operation_id: resolvedOperationId },
 					output: { status },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
-					sessionId: chatContext.sessionId,
 					chatId: chatContext.chatId,
-					chatName: chatContext.chatName,
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 
@@ -908,9 +907,25 @@ export function registerTaskWriteTools(server: McpServer): void {
 			taskId: TaskIdentifierSchema.describe('Task ID (full UUID or truncated prefix)'),
 			priority: TaskPrioritySchema.describe('New priority: low, medium, high, urgent'),
 			operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted.'),
-			model: z.string().trim().min(1).max(120).describe('Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'),
-			agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'),
-			tokens: TokensSchema.optional().describe('Optional cumulative token usage for this entire chat session up to this point'),
+			model: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe(
+					'Model name used (e.g. "claude-sonnet-4-20250514", "gemini-2.5-pro"). You MUST provide the actual model identifier.'
+				),
+			agent: z
+				.string()
+				.trim()
+				.min(1)
+				.max(80)
+				.describe(
+					'Agent/client name (e.g. "claude-code", "cursor", "antigravity"). You MUST provide the actual client name.'
+				),
+			tokens: TokensSchema.optional().describe(
+				'Optional cumulative token usage for this entire chat session up to this point'
+			),
 			execution_mode: z
 				.enum(['preview', 'execute'])
 				.optional()
@@ -922,23 +937,22 @@ export function registerTaskWriteTools(server: McpServer): void {
 				.max(200)
 				.optional()
 				.describe('Token returned by preview mode for sensitive writes'),
-			chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
-			chat_name: z.string().trim().min(1).max(160).describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
+			chat_id: z
+				.string()
+				.trim()
+				.min(1)
+				.max(120)
+				.describe('Chat/thread identifier. You MUST provide the current chat or conversation ID.'),
+			chat_name: z
+				.string()
+				.trim()
+				.min(1)
+				.max(160)
+				.describe('Chat/thread display name. You MUST provide a descriptive name for this conversation.')
 		},
 		{ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
 		async (
-			{
-				taskId,
-				priority,
-				operation_id,
-				model,
-				agent,
-				tokens,
-				execution_mode,
-				confirmation_token,
-				chat_id,
-				chat_name
-			},
+			{ taskId, priority, operation_id, model, agent, tokens, execution_mode, confirmation_token, chat_id, chat_name },
 			extra
 		) => {
 			const startedAt = Date.now();
@@ -1005,8 +1019,6 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const chatContext = resolveChatContext({
 					chatId: chat_id,
-					chatName: chat_name,
-					sessionId: extra.sessionId,
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ priority }), tokens);
@@ -1035,16 +1047,13 @@ export function registerTaskWriteTools(server: McpServer): void {
 					(persistedTask) => persistedTask.priority === priority
 				);
 
-
 				trackToolCall({
 					tool: 'set_task_priority',
 					input: { taskId, priority, operation_id: resolvedOperationId },
 					output: { priority },
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
-					sessionId: chatContext.sessionId,
 					chatId: chatContext.chatId,
-					chatName: chatContext.chatName,
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 

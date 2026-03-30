@@ -85,9 +85,7 @@ export function trackToolCall(event: {
 	latencyMs: number;
 	duplicateAvoided?: boolean;
 	retries?: number;
-	sessionId?: string;
 	chatId?: string;
-	chatName?: string;
 	prompt?: string;
 }): void {
 	const stat = getMetric(event.tool);
@@ -107,9 +105,7 @@ export function trackToolCall(event: {
 		latencyMs: event.latencyMs,
 		duplicateAvoided: !!event.duplicateAvoided,
 		retries: event.retries || 0,
-		sessionId: event.sessionId,
 		chatId: event.chatId,
-		chatName: event.chatName,
 		prompt: event.prompt
 	};
 
