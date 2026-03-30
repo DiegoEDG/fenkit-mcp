@@ -171,15 +171,8 @@ function resolveChatContext(options: {
 	sessionId?: string;
 	requestHeaders?: unknown;
 }): ResolvedChatContext {
-	const headerChatName = pickHeaderValue(options.requestHeaders, [
-		'x-chat-name',
-		'x-chat-title',
-		'x-thread-name',
-		'x-thread-title',
-		'x-codex-chat-name',
-		'x-codex-chat-title'
-	]);
-	const headerChatId = pickHeaderValue(options.requestHeaders, ['x-chat-id', 'x-thread-id', 'x-codex-chat-id', 'x-codex-thread-id']);
+	const headerChatName = pickHeaderValue(options.requestHeaders, ['x-chat-name']);
+	const headerChatId = pickHeaderValue(options.requestHeaders, ['x-chat-id']);
 	const sessionId = pickString(options.sessionId) ?? 'session:unknown';
 	const chatId = pickString(options.chatId) ?? headerChatId ?? `session:${sessionId}`;
 	const chatName = pickString(options.chatName) ?? headerChatName ?? `Chat ${chatId}`;
@@ -190,7 +183,7 @@ function resolveChatContext(options: {
 function resolveAgentName(options: { agent?: string; requestHeaders?: unknown }): string {
 	return (
 		pickString(options.agent) ??
-		pickHeaderValue(options.requestHeaders, ['x-agent', 'x-client', 'x-client-name', 'x-codex-client']) ??
+		pickHeaderValue(options.requestHeaders, ['x-agent']) ??
 		DEFAULT_AGENT
 	);
 }
@@ -198,7 +191,7 @@ function resolveAgentName(options: { agent?: string; requestHeaders?: unknown })
 function resolveModelName(options: { model?: string; requestHeaders?: unknown }): string {
 	return (
 		pickString(options.model) ??
-		pickHeaderValue(options.requestHeaders, ['x-model', 'x-llm-model', 'x-openai-model', 'x-codex-model']) ??
+		pickHeaderValue(options.requestHeaders, ['x-model']) ??
 		DEFAULT_MODEL
 	);
 }
@@ -252,6 +245,11 @@ function resolveIdempotencyErrorCode(error: unknown): 'idempotency_conflict' | '
 	return 'other';
 }
 
+function resolvePlanLifecycleStatus(currentStatus: string): string {
+	if (currentStatus === 'todo' || currentStatus === 'backlog') return 'in_progress';
+	return currentStatus;
+}
+
 async function syncChatTaskBindingHeartbeatFromWrite(options: {
 	projectId: string;
 	taskId: string;
@@ -262,7 +260,7 @@ async function syncChatTaskBindingHeartbeatFromWrite(options: {
 }): Promise<void> {
 	const resolvedChatId =
 		pickString(options.chatId) ??
-		pickHeaderValue(options.requestHeaders, ['x-chat-id', 'x-thread-id', 'x-codex-chat-id', 'x-codex-thread-id']);
+		pickHeaderValue(options.requestHeaders, ['x-chat-id']);
 	if (!resolvedChatId) return;
 
 	const api = getApiClient();
@@ -405,6 +403,8 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
+				const targetStatus = resolvePlanLifecycleStatus(currentTask.status);
+				const shouldMoveToInProgress = targetStatus !== currentTask.status;
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				const chatContext = resolveChatContext({
@@ -430,6 +430,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 									`- operation_id: ${resolvedOperationId}`,
 									`- plan_steps: ${parsed.steps.length}`,
 									`- files_affected: ${parsed.files_affected.length}`,
+									`- target_status: ${targetStatus}`,
 									`- payload_hash: ${payloadHash}`,
 									`- confirmation_token: ${confirmation.token}`,
 									`- confirmation_expires_at: ${confirmation.expiresAt}`,
@@ -472,7 +473,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					tokenSource: resolvedTokens.tokenSource,
 					tokens: resolvedTokens.tokens,
 					latencyMs: Date.now() - startedAt,
-					changedFields: ['plan'],
+					changedFields: shouldMoveToInProgress ? ['plan', 'status'] : ['plan'],
 					requestHeaders: extra.requestInfo?.headers,
 					confirmation: confirmationMeta
 				});
@@ -481,14 +482,17 @@ export function registerTaskWriteTools(server: McpServer): void {
 					api,
 					projectId,
 					currentTask.id,
-					{ plan: planContent, ...mcpPayload },
-					(persistedTask) => typeof persistedTask.plan === 'string' && persistedTask.plan.trim() === planContent
+					{ plan: planContent, status: targetStatus, ...mcpPayload },
+					(persistedTask) =>
+						typeof persistedTask.plan === 'string' &&
+						persistedTask.plan.trim() === planContent &&
+						persistedTask.status === targetStatus
 				);
 
 				await syncChatTaskBindingHeartbeatFromWrite({
 					projectId,
 					taskId: currentTask.id,
-					status: currentTask.status,
+					status: targetStatus,
 					lastTool: 'update_task_plan',
 					chatId: chat_id,
 					requestHeaders: extra.requestInfo?.headers
@@ -510,7 +514,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied`
+							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Status**: ${targetStatus}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied`
 						}
 					]
 				};

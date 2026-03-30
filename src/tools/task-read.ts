@@ -20,7 +20,7 @@ const StatusFilterSchema = z
 	.max(120)
 	.regex(/^[a-z_,]+$/i, 'Status filter must be comma-separated lowercase values');
 
-const CHAT_ID_HEADER_KEYS = ['x-chat-id', 'x-thread-id', 'x-codex-chat-id', 'x-codex-thread-id'] as const;
+const CHAT_ID_HEADER_KEYS = ['x-chat-id'] as const;
 
 interface ResolveChatTaskBindingResponse {
 	state: 'bound' | 'unbound' | 'needs_confirmation';
