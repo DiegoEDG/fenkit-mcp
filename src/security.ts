@@ -1,41 +1,30 @@
-const DEFAULT_APP_URL = 'https://ickit-fe.vercel.app';
-const DEFAULT_API_URL = 'https://ickit-be.vercel.app/api/v1';
+const PROD_APP_URL = 'https://ickit-fe.vercel.app';
+const PROD_API_URL = 'https://ickit-be.vercel.app/api/v1';
 
-const ALLOWED_APP_HOSTS = new Set<string>(['ickit-fe.vercel.app']);
-const ALLOWED_API_HOSTS = new Set<string>(['ickit-be.vercel.app']);
+const LOCAL_APP_URL = 'http://localhost:5173';
+const LOCAL_API_URL = 'http://localhost:3000/api/v1';
 
 const LOCALHOST_HOSTNAMES = new Set<string>(['localhost', '127.0.0.1', '::1']);
 
 export type UrlType = 'app' | 'api';
 
-export interface ValidatedUrl {
-	url: string;
-	origin: string;
-	isLocalDev: boolean;
+export function isLocalDevEnabled(): boolean {
+	return process.env['FENKIT_LOCAL'] === 'true';
 }
 
 function isLocalhostHost(hostname: string): boolean {
 	return LOCALHOST_HOSTNAMES.has(hostname);
 }
 
-function isLocalDevEnabled(): boolean {
-	return process.env['FENKIT_ALLOW_LOCALHOST_DEV'] === 'true';
+export function getActiveAppUrl(): string {
+	return isLocalDevEnabled() ? LOCAL_APP_URL : PROD_APP_URL;
 }
 
-function normalizeApiUrl(url: URL): URL {
-	if (isLocalhostHost(url.hostname) && !url.pathname.startsWith('/api/v1')) {
-		const next = new URL(url.toString());
-		next.pathname = `/api/v1${url.pathname === '/' ? '' : url.pathname}`;
-		return next;
-	}
-	return url;
+export function getActiveApiUrl(): string {
+	return isLocalDevEnabled() ? LOCAL_API_URL : PROD_API_URL;
 }
 
-function getHostAllowlist(type: UrlType): Set<string> {
-	return type === 'app' ? ALLOWED_APP_HOSTS : ALLOWED_API_HOSTS;
-}
-
-export function validateServiceUrl(input: string, type: UrlType): ValidatedUrl {
+export function validateServiceUrl(input: string, type: UrlType): { url: string; origin: string } {
 	let parsed: URL;
 	try {
 		parsed = new URL(input);
@@ -43,60 +32,30 @@ export function validateServiceUrl(input: string, type: UrlType): ValidatedUrl {
 		throw new Error(`${type}Url must be a valid absolute URL.`);
 	}
 
-	if (parsed.username || parsed.password) {
-		throw new Error(`${type}Url cannot include credentials in the URL.`);
-	}
+	const activeUrl = type === 'app' ? getActiveAppUrl() : getActiveApiUrl();
+	const activeParsed = new URL(activeUrl);
 
-	const isLocalDev = isLocalhostHost(parsed.hostname);
-	if (isLocalDev) {
-		if (!isLocalDevEnabled()) {
-			throw new Error(
-				'Localhost URLs are disabled. Set FENKIT_ALLOW_LOCALHOST_DEV=true to allow local development URLs.',
-			);
-		}
-		if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-			throw new Error(`${type}Url must use HTTP or HTTPS for localhost development.`);
-		}
-	} else {
-		if (parsed.protocol !== 'https:') {
-			throw new Error(`${type}Url must use HTTPS.`);
-		}
-		const allowlist = getHostAllowlist(type);
-		if (!allowlist.has(parsed.hostname)) {
-			throw new Error(`${type}Url host is not in the allowlist.`);
-		}
+	// In the new world, we only allow the exactly "active" origin
+	if (parsed.origin !== activeParsed.origin) {
+		throw new Error(`${type}Url origin mismatch. Expected ${activeParsed.origin} but got ${parsed.origin}.`);
 	}
-
-	const normalized = type === 'api' ? normalizeApiUrl(parsed) : parsed;
 
 	return {
-		url: normalized.toString().replace(/\/$/, ''),
-		origin: normalized.origin,
-		isLocalDev,
+		url: parsed.toString().replace(/\/$/, ''),
+		origin: parsed.origin,
 	};
 }
 
 export function isAllowedApiOrigin(origin: string): boolean {
-	let parsed: URL;
-	try {
-		parsed = new URL(origin);
-	} catch {
-		return false;
-	}
-	const isLocalDev = isLocalhostHost(parsed.hostname);
-	if (isLocalDev) {
-		return isLocalDevEnabled();
-	}
-	if (parsed.protocol !== 'https:') {
-		return false;
-	}
-	return ALLOWED_API_HOSTS.has(parsed.hostname);
+	const activeApiUrl = getActiveApiUrl();
+	const activeOrigin = new URL(activeApiUrl).origin;
+	return origin === activeOrigin;
 }
 
 export function getDefaultAppUrl(): string {
-	return DEFAULT_APP_URL;
+	return getActiveAppUrl();
 }
 
 export function getDefaultApiUrl(): string {
-	return DEFAULT_API_URL;
+	return getActiveApiUrl();
 }

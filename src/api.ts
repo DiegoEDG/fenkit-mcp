@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { loadConfig } from './config.js';
-import { isAllowedApiOrigin, validateServiceUrl } from './security.js';
+import { getActiveApiUrl, isAllowedApiOrigin, validateServiceUrl } from './security.js';
 
 let client: AxiosInstance | null = null;
 
@@ -75,7 +75,7 @@ export function getApiClient(force = false): AxiosInstance {
   if (client && !force) return client;
 
   const config = loadConfig();
-  client = createApiClient({ apiUrl: config.apiUrl, token: config.token });
+  client = createApiClient({ apiUrl: getActiveApiUrl(), token: config.token });
 
   return client;
 }

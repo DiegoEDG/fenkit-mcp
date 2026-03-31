@@ -9,12 +9,10 @@ export interface FnkConfig {
   token: string;
   currentProjectId?: string;
   currentProjectName?: string;
-  apiUrl: string;
 }
 
 const DEFAULT_CONFIG: FnkConfig = {
   token: '',
-  apiUrl: 'https://ickit-be.vercel.app/api/v1',
 };
 
 function ensureConfigDir(): void {

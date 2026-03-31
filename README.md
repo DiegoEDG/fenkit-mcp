@@ -101,4 +101,16 @@ No dejes que tu agente trabaje en el vacío. Haz que cada línea de código cuen
 npx -y fenkit-mcp setup cursor
 ```
 
+***
+
+## 🛠️ Desarrollo Local
+
+Si estás trabajando en el backend localmente y quieres que el MCP se conecte a tu instancia de desarrollo (`localhost:3000`), simplemente inicia el servidor MCP con la bandera:
+
+```bash
+FENKIT_LOCAL=true
+```
+
+Esto cambiará automáticamente todos los endpoints a `localhost` sin necesidad de reconfigurar nada.
+
 **Haz que tu agente construya. Deja que Fenkit lo demuestre.**

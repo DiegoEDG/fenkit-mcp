@@ -5,7 +5,7 @@ import { z } from 'zod';
 import open from 'open';
 import { loadConfig, saveConfig } from '../config.js';
 import { createApiClient } from '../api.js';
-import { getDefaultApiUrl, getDefaultAppUrl, validateServiceUrl } from '../security.js';
+import { getActiveApiUrl, getActiveAppUrl, isLocalDevEnabled, validateServiceUrl } from '../security.js';
 
 interface ProjectResponse {
 	id: string;
@@ -171,9 +171,9 @@ export function registerAuthTools(
 	const includeStatus = options?.includeStatus ?? true;
 
 	// login — Shared handler for browser-based auth
-	const loginHandler = async ({ appUrl, apiUrl }: { appUrl?: string; apiUrl?: string }) => {
-		const resolvedAppUrl = appUrl ?? getDefaultAppUrl();
-		const resolvedApiUrl = apiUrl ?? getDefaultApiUrl();
+	const loginHandler = async () => {
+		const resolvedAppUrl = getActiveAppUrl();
+		const resolvedApiUrl = getActiveApiUrl();
 		let validatedAppUrl: ReturnType<typeof validateServiceUrl>;
 		let validatedApiUrl: ReturnType<typeof validateServiceUrl>;
 		try {
@@ -256,8 +256,7 @@ export function registerAuthTools(
 		}
 
 		const configUpdate: Parameters<typeof saveConfig>[0] = {
-			token,
-			apiUrl: validatedApiUrl.url
+			token
 		};
 
 		if (projects.length === 1) {
@@ -291,10 +290,7 @@ export function registerAuthTools(
 		server.tool(
 			'login',
 			'Authenticate via browser. Opens a browser window pointing to the Fenkit app, waits for authentication, then saves the token automatically.',
-			{
-				appUrl: z.string().optional().describe('Frontend app URL (default: https://ickit-fe.vercel.app)'),
-				apiUrl: z.string().optional().describe('API base URL (default: https://ickit-be.vercel.app/api/v1)')
-			},
+			{},
 			{
 				readOnlyHint: false,
 				destructiveHint: false,
@@ -324,7 +320,8 @@ export function registerAuthTools(
 
 				const lines = [
 					`**Authenticated**: ${authenticated ? '✅ Yes' : "❌ No — run 'login' first"}`,
-					`**API URL**: ${config.apiUrl}`
+					`**Environment**: ${isLocalDevEnabled() ? '🧪 Localhost' : '🚀 Production'}`,
+					`**API URL**: ${getActiveApiUrl()}`
 				];
 
 			if (hasProject) {
