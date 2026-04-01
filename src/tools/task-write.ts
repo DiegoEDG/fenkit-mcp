@@ -16,7 +16,7 @@ import {
 } from '../schemas.js';
 import { resolveTaskByIdentifier } from './task-common.js';
 import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observability.js';
-import { getGitMetadata } from '../git.js';
+import { getGitMetadata, resolveAffectedRepos } from '../git.js';
 import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../confirmation.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
@@ -287,7 +287,16 @@ function buildMcpPayload(options: {
 	requestHeaders?: unknown;
 	confirmation?: ConfirmationMeta;
 	gitContext?: GitContext;
+	gitContexts?: GitContext[];
+	affectedFiles?: string[];
 }): { mcpContext: Record<string, unknown>; mcpEvent: Record<string, unknown> } {
+	// If multi-repo contexts are provided, use them
+	// Otherwise fall back to single gitContext for backward compatibility
+	const contexts = options.gitContexts ?? (options.gitContext ? [options.gitContext] : []);
+	
+	// Build the primary git fields from the first context (for backward compatibility)
+	const primaryContext = contexts[0];
+	
 	return {
 		mcpContext: {
 			actor: options.agent,
@@ -296,10 +305,21 @@ function buildMcpPayload(options: {
 			session_id: options.chatContext.sessionId,
 			last_seen_at: new Date().toISOString(),
 			last_model: options.model,
-			git_branch: options.gitContext?.branch ?? undefined,
-			git_commit_hash: options.gitContext?.commitHash ?? undefined,
-			git_remote_url: options.gitContext?.remoteUrl ?? undefined,
-			git_status: options.gitContext?.status ?? undefined
+			// Primary repo fields (backward compatibility)
+			git_branch: primaryContext?.branch ?? undefined,
+			git_commit_hash: primaryContext?.commitHash ?? undefined,
+			git_remote_url: primaryContext?.remoteUrl ?? undefined,
+			git_status: primaryContext?.status ?? undefined,
+			// Multi-repo support
+			git_contexts: contexts.length > 0 ? contexts.map(ctx => ({
+				branch: ctx.branch,
+				commit_hash: ctx.commitHash,
+				remote_url: ctx.remoteUrl,
+				status: ctx.status,
+				repo_name: ctx.repoName,
+				repo_path: ctx.repoPath
+			})) : undefined,
+			affected_files: options.affectedFiles
 		},
 		mcpEvent: {
 			tool: options.toolName,
@@ -451,6 +471,11 @@ export function registerTaskWriteTools(server: McpServer): void {
 				}
 
 				const gitContext = getGitMetadata();
+				// Multi-repo detection: use files_affected from plan if available
+				const affectedFiles = parsed.files_affected ?? [];
+				const gitContexts = affectedFiles.length > 0
+					? resolveAffectedRepos(affectedFiles)
+					: [gitContext];
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_plan',
 					operationId: resolvedOperationId,
@@ -464,7 +489,9 @@ export function registerTaskWriteTools(server: McpServer): void {
 					changedFields: shouldMoveToInProgress ? ['plan', 'status'] : ['plan'],
 					requestHeaders: extra.requestInfo?.headers,
 					confirmation: confirmationMeta,
-					gitContext
+					gitContext,
+					gitContexts,
+					affectedFiles
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
@@ -653,6 +680,11 @@ export function registerTaskWriteTools(server: McpServer): void {
 				}
 
 				const gitContext = getGitMetadata();
+				// Multi-repo detection: use files_modified from walkthrough
+				const affectedFiles = parsed.files_modified ?? [];
+				const gitContexts = affectedFiles.length > 0
+					? resolveAffectedRepos(affectedFiles)
+					: [gitContext];
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_walkthrough',
 					operationId: resolvedOperationId,
@@ -666,7 +698,9 @@ export function registerTaskWriteTools(server: McpServer): void {
 					changedFields: ['status', 'walkthrough'],
 					requestHeaders: extra.requestInfo?.headers,
 					confirmation: confirmationMeta,
-					gitContext
+					gitContext,
+					gitContexts,
+					affectedFiles
 				});
 
 				const attemptsUsed = await patchTaskWithRetryAndVerification(
