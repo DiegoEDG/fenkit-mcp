@@ -18,6 +18,7 @@ import { resolveTaskByIdentifier } from './task-common.js';
 import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observability.js';
 import { getGitMetadata, resolveAffectedRepos } from '../git.js';
 import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../confirmation.js';
+import { bindingTracker } from '../lifecycle/index.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
 	const lines: string[] = [];
@@ -123,6 +124,57 @@ interface GitContext {
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Build a lifecycle state info string for tool responses.
+ * Shows the current lifecycle step and what remains.
+ */
+function buildLifecycleInfoResponse(taskId: string): string {
+	const state = bindingTracker.getState(taskId);
+	if (!state) return '';
+
+	const lines: string[] = ['', '', '---'];
+	lines.push('**Lifecycle State:**');
+
+	if (state.boundAt) {
+		lines.push(`- [x] Task bound`);
+	} else {
+		lines.push(`- [ ] Task bound`);
+	}
+
+	if (state.planWrittenAt) {
+		lines.push(`- [x] Plan written`);
+	} else {
+		lines.push(`- [ ] Plan written`);
+	}
+
+	if (state.inProgressAt) {
+		lines.push(`- [x] In progress`);
+	} else {
+		lines.push(`- [ ] In progress`);
+	}
+
+	if (state.walkthroughWrittenAt) {
+		lines.push(`- [x] Walkthrough written`);
+	} else {
+		lines.push(`- [ ] Walkthrough written`);
+	}
+
+	if (state.inReviewAt) {
+		lines.push(`- [x] In review`);
+	} else {
+		lines.push(`- [ ] In review`);
+	}
+
+	// Add warning if lifecycle is not complete
+	const nextStep = bindingTracker.getNextRequiredStep(taskId);
+	if (nextStep) {
+		lines.push('');
+		lines.push(`> ⚠️ **Lifecycle incomplete**: Next step required is \`${nextStep}\`.`);
+	}
+
+	return lines.join('\n');
 }
 
 type TokenSource = 'exact' | 'estimate' | 'mixed';
@@ -515,11 +567,22 @@ export function registerTaskWriteTools(server: McpServer): void {
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 
+				// Lifecycle tracking: mark plan as written for bound tasks
+				if (bindingTracker.isBound(currentTask.id)) {
+					bindingTracker.markPlanWritten(currentTask.id);
+					if (shouldMoveToInProgress) {
+						bindingTracker.markInProgress(currentTask.id);
+					}
+				}
+
+				// Build lifecycle state for response
+				const lifecycleInfo = buildLifecycleInfoResponse(currentTask.id);
+
 				return {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Status**: ${targetStatus}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied`
+							text: `✔ Plan updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Steps**: ${parsed.steps.length}\n**Files affected**: ${parsed.files_affected.length}\n**Status**: ${targetStatus}\n**Complexity**: ${parsed.estimated_complexity || 'not specified'}\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied${lifecycleInfo}`
 						}
 					]
 				};
@@ -724,11 +787,20 @@ export function registerTaskWriteTools(server: McpServer): void {
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 
+				// Lifecycle tracking: mark walkthrough as written for bound tasks
+				if (bindingTracker.isBound(currentTask.id)) {
+					bindingTracker.markWalkthroughWritten(currentTask.id);
+					bindingTracker.markInReview(currentTask.id);
+				}
+
+				// Build lifecycle state for response
+				const lifecycleInfo = buildLifecycleInfoResponse(currentTask.id);
+
 				return {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}\n**Status**: in_review\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied`
+							text: `✔ Walkthrough updated for task \`${currentTask.id.substring(0, 5)}\`.\n\n**Mode**: ${artifactMode}\n**Changes**: ${parsed.changes.length}\n**Files modified**: ${parsed.files_modified.length}\n**Status**: in_review\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied${lifecycleInfo}`
 						}
 					]
 				};
@@ -911,11 +983,23 @@ export function registerTaskWriteTools(server: McpServer): void {
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
 
+				// Lifecycle tracking: mark status change for bound tasks
+				if (bindingTracker.isBound(currentTask.id)) {
+					if (status === 'in_progress') {
+						bindingTracker.markInProgress(currentTask.id);
+					} else if (status === 'in_review') {
+						bindingTracker.markInReview(currentTask.id);
+					}
+				}
+
+				// Build lifecycle state for response
+				const lifecycleInfo = buildLifecycleInfoResponse(currentTask.id);
+
 				return {
 					content: [
 						{
 							type: 'text' as const,
-							text: `✔ Task \`${currentTask.id.substring(0, 5)}\` status set to \`${status}\`.\n\n**Operation ID**: ${resolvedOperationId}\nresult_code: applied`
+							text: `✔ Task \`${currentTask.id.substring(0, 5)}\` status set to \`${status}\`.\n\n**Operation ID**: ${resolvedOperationId}\n**result_code**: applied${lifecycleInfo}`
 						}
 					]
 				};

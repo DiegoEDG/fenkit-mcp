@@ -13,6 +13,7 @@ import {
 	STATUS_ICONS,
 	SectionSchema
 } from '../task-context-render.js';
+import { bindingTracker } from '../lifecycle/index.js';
 const StatusFilterSchema = z
 	.string()
 	.trim()
@@ -182,6 +183,9 @@ export function registerTaskReadTools(server: McpServer): void {
 					chatId: chat_id,
 					headers: extra.requestInfo?.headers
 				});
+
+				// Bind task to local lifecycle tracker
+				bindingTracker.bind(task, data.project_id, chat_id);
 
 				try {
 					const { data: projects } = await api.get<Array<{ id: string; name: string }>>('/projects');
@@ -403,12 +407,16 @@ export function registerTaskReadTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
+				const chatId = getHeaderString(extra.requestInfo?.headers, CHAT_ID_HEADER_KEYS) ?? 'unknown';
 				await syncChatTaskBindingHeartbeat({
 					projectId,
 					task,
 					tool: 'get_task_context_compact',
 					headers: extra.requestInfo?.headers
 				});
+
+				// Bind task to local lifecycle tracker
+				bindingTracker.bind(task, projectId, chatId);
 
 				const options: CompactOptions = {
 					maxChars: clampMaxChars(maxChars)
@@ -443,12 +451,16 @@ export function registerTaskReadTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
+				const chatId = getHeaderString(extra.requestInfo?.headers, CHAT_ID_HEADER_KEYS) ?? 'unknown';
 				await syncChatTaskBindingHeartbeat({
 					projectId,
 					task,
 					tool: 'get_task_context_full',
 					headers: extra.requestInfo?.headers
 				});
+
+				// Bind task to local lifecycle tracker
+				bindingTracker.bind(task, projectId, chatId);
 
 				return {
 					content: [{ type: 'text' as const, text: renderFullContext(task) }]
