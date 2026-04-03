@@ -3,6 +3,15 @@ import { z } from 'zod';
 const ShortTextSchema = z.string().trim().min(1).max(240);
 const MediumTextSchema = z.string().trim().min(1).max(2000);
 const PathLikeSchema = z.string().trim().min(1).max(260);
+const SuggestedGitCommitSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(240)
+  .regex(
+    /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9][a-z0-9-]{0,23}\))?!?: .+ \([a-z0-9]{5}\)$/,
+    'Must be a conventional commit ending with a 5-char task id, e.g. "feat(scope): message (2f83b)"'
+  );
 
 export const TaskStatusSchema = z.enum(['todo', 'in_progress', 'in_review', 'backlog', 'frozen']);
 export const TaskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
@@ -47,6 +56,9 @@ export const WalkthroughSchema = z.object({
   known_issues: z.array(ShortTextSchema).max(30).optional().describe('Known issues remaining'),
   next_steps: z.array(ShortTextSchema).max(30).optional().describe('Recommended next steps'),
   notes: z.string().trim().max(12000).optional().describe('Free-form narrative context (markdown). Do not duplicate structured fields.'),
+  suggested_git_commit: SuggestedGitCommitSchema.describe(
+    'Required suggested conventional commit message ending with 5-character task id (e.g. "feat(scope): short message (2f83b)")'
+  ),
 }).strict();
 export type Walkthrough = z.infer<typeof WalkthroughSchema>;
 

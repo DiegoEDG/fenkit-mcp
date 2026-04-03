@@ -18,7 +18,6 @@ import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observab
 import { getGitMetadata, resolveAffectedRepos } from '../git.js';
 import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../confirmation.js';
 import { bindingTracker } from '../lifecycle/index.js';
-import { buildSuggestedGitCommit } from '../walkthrough-commit.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
 	const lines: string[] = [];
@@ -67,7 +66,7 @@ function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
 	return lines.join('\n').trim();
 }
 
-function renderWalkthroughMarkdown(walkthrough: z.infer<typeof WalkthroughSchema>, taskId: string): string {
+function renderWalkthroughMarkdown(walkthrough: z.infer<typeof WalkthroughSchema>): string {
 	const lines: string[] = [];
 	lines.push('## Summary');
 	lines.push(walkthrough.summary);
@@ -107,14 +106,8 @@ function renderWalkthroughMarkdown(walkthrough: z.infer<typeof WalkthroughSchema
 		lines.push('');
 	}
 
-	const suggestedCommit = buildSuggestedGitCommit({
-		taskId,
-		summary: walkthrough.summary,
-		changes: walkthrough.changes,
-		filesModified: walkthrough.files_modified
-	});
 	lines.push('## Suggested Git Commit');
-	lines.push(`\`${suggestedCommit}\``);
+	lines.push(`\`${walkthrough.suggested_git_commit}\``);
 	lines.push('');
 
 	return lines.join('\n').trim();
@@ -697,7 +690,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
-				const walkthroughContent = renderWalkthroughMarkdown(parsed, currentTask.id);
+				const walkthroughContent = renderWalkthroughMarkdown(parsed);
 				const resolvedTokens = resolveTokens(walkthroughContent, tokens);
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
 				const confirmationScope = `task:${projectId}:${currentTask.id}`;
