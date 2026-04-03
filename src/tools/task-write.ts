@@ -183,6 +183,8 @@ interface TokenTotals {
 	output?: number;
 	total?: number;
 	estimate?: number;
+	reasoning?: number;
+	toolUse?: number;
 }
 
 interface ResolvedChatContext {
@@ -267,6 +269,8 @@ function resolveTokens(
 	const output = toFiniteNumber(provided.output);
 	const total = toFiniteNumber(provided.total);
 	const estimateValue = toFiniteNumber(provided.estimate) ?? estimate;
+	const reasoning = toFiniteNumber(provided.reasoning);
+	const toolUse = toFiniteNumber(provided.tool_use);
 	const derivedTotal = total ?? (input !== undefined && output !== undefined ? input + output : estimateValue);
 
 	const hasAnyExact = input !== undefined || output !== undefined || total !== undefined;
@@ -277,7 +281,7 @@ function resolveTokens(
 		: 'estimate';
 
 	return {
-		tokens: { input, output, total: derivedTotal, estimate: estimateValue },
+		tokens: { input, output, total: derivedTotal, estimate: estimateValue, reasoning, toolUse },
 		tokenSource
 	};
 }

@@ -56,6 +56,8 @@ export const TokensSchema = z.object({
   output: z.number().optional().describe('Cumulative output tokens used for this entire chat session'),
   total: z.number().optional().describe('Cumulative total tokens used for this entire chat session'),
   estimate: z.number().optional().describe('Estimated cumulative token count'),
+  reasoning: z.number().optional().describe('Cumulative reasoning/thinking tokens (Claude thinking, o1 reasoning, etc.)'),
+  tool_use: z.number().optional().describe('Cumulative tokens used by tool calls (if reported separately by the model)'),
 }).strict();
 
 // --- Session Summary Schema (PRD 4.2) ---
