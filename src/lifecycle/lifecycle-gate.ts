@@ -24,6 +24,7 @@ import { getApiClient } from '../api.js';
 import { requireProject } from '../config.js';
 import { getGitMetadata } from '../git.js';
 import { stableHash } from '../observability.js';
+import { buildSuggestedGitCommit } from '../walkthrough-commit.js';
 
 // ─── Fallback Artifacts ──────────────────────────────────────────────────────
 
@@ -368,7 +369,7 @@ export class LifecycleGate {
 		};
 
 		// Render walkthrough as markdown
-		const walkthroughContent = this.renderWalkthroughMarkdown(walkthrough);
+		const walkthroughContent = this.renderWalkthroughMarkdown(taskId, walkthrough);
 
 		// Send to backend
 		await api.patch(`/projects/${config.currentProjectId}/tasks/${taskId}`, {
@@ -425,7 +426,7 @@ export class LifecycleGate {
 		return lines.join('\n').trim();
 	}
 
-	private renderWalkthroughMarkdown(walkthrough: FallbackWalkthrough): string {
+	private renderWalkthroughMarkdown(taskId: string, walkthrough: FallbackWalkthrough): string {
 		const lines: string[] = [];
 		lines.push('## Summary');
 		lines.push(walkthrough.summary);
@@ -439,6 +440,16 @@ export class LifecycleGate {
 		for (const file of walkthrough.files_modified) {
 			lines.push(`- \`${file}\``);
 		}
+		lines.push('');
+
+		const suggestedCommit = buildSuggestedGitCommit({
+			taskId,
+			summary: walkthrough.summary,
+			changes: walkthrough.changes,
+			filesModified: walkthrough.files_modified
+		});
+		lines.push('## Suggested Git Commit');
+		lines.push(`\`${suggestedCommit}\``);
 		return lines.join('\n').trim();
 	}
 }
