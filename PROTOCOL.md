@@ -38,10 +38,9 @@ Use `execution_mode="preview"` first (when confirmation is enabled), then execut
 When starting implementation:
 ```text
 set_task_status(taskId, status, operation_id?, model?, agent?)
-set_task_priority(taskId, priority, operation_id?, model?, agent?)
 ```
 Use `status="in_progress"` when work begins.
-For sensitive writes (`select_project`, status/priority changes, plan/walkthrough updates), prefer preview → execute flow.
+For sensitive writes (`select_project`, status changes, plan/walkthrough updates), prefer preview → execute flow.
 
 ### 5) Completion
 After verification:

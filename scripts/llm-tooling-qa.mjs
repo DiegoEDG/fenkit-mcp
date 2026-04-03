@@ -12,7 +12,6 @@ function routePrompt(prompt) {
 	if ((text.includes('done') || text.includes('in review') || text.includes('in progress') || text.includes('status')) && text.includes('task')) {
 		return 'set_task_status';
 	}
-	if (text.includes('priority') || text.includes('urgent')) return 'set_task_priority';
 	if (text.includes('plan')) return 'update_task_plan';
 	if (text.includes('implemented') || text.includes('tested') || text.includes('walkthrough') || text.includes('document')) {
 		return 'update_task_walkthrough';

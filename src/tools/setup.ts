@@ -45,8 +45,6 @@ The lifecycle must be followed IN ORDER:
 Use preview → execute flow for:
 - \`select_project\`, \`set_task_status\`, \`update_task_plan\`, \`update_task_walkthrough\`
 
-Note: \`set_task_priority\` is optional and NOT part of the strict lifecycle.
-
 ### 5. Compaction & Context Trimming
 - If the system notifies you of context trimming or compaction:
   - Immediately call \`update_task_walkthrough\` or \`update_task_plan\` to persist any unsaved progress.
