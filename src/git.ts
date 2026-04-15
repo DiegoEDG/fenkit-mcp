@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 export interface GitMetadata {
 	branch: string | null;
@@ -80,7 +80,7 @@ function findNearestGitRoot(): string | undefined {
  * e.g. "/Users/me/project/02-ickit-fe" → "02-ickit-fe"
  */
 function extractRepoName(repoPath: string): string {
-	const parts = repoPath.split(/[\/\\]/).filter(Boolean);
+	const parts = repoPath.split(/[/\\]/).filter(Boolean);
 	return parts[parts.length - 1] || repoPath;
 }
 

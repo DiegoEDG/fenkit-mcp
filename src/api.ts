@@ -24,12 +24,12 @@ export function createApiClient(options: { apiUrl: string; token: string }): Axi
     'history',
   ];
 
-  function sanitizeObject(obj: any): any {
+  function sanitizeObject(obj: unknown): unknown {
     if (Array.isArray(obj)) {
       return obj.map(sanitizeObject);
     }
     if (obj !== null && typeof obj === 'object') {
-      const sanitized: Record<string, any> = {};
+      const sanitized: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(obj)) {
         if (!FORBIDDEN_METADATA_KEYS.includes(key)) {
           sanitized[key] = sanitizeObject(value);

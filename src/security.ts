@@ -4,7 +4,6 @@ const PROD_API_URL = 'https://ickit-be.vercel.app/api/v1';
 const LOCAL_APP_URL = 'http://localhost:5173';
 const LOCAL_API_URL = 'http://localhost:3000/api/v1';
 
-const LOCALHOST_HOSTNAMES = new Set<string>(['localhost', '127.0.0.1', '::1']);
 
 export type UrlType = 'app' | 'api';
 
@@ -12,9 +11,7 @@ export function isLocalDevEnabled(): boolean {
 	return process.env['FENKIT_LOCAL'] === 'true';
 }
 
-function isLocalhostHost(hostname: string): boolean {
-	return LOCALHOST_HOSTNAMES.has(hostname);
-}
+
 
 export function getActiveAppUrl(): string {
 	return isLocalDevEnabled() ? LOCAL_APP_URL : PROD_APP_URL;
