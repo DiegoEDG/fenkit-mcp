@@ -6,6 +6,29 @@ import { promisify } from 'node:util';
 const execAsync = promisify(exec);
 
 /**
+ * Cache for findGitRootForPath results.
+ * Key: resolved directory path
+ * Value: git root path or null if not found
+ */
+const gitRootCache = new Map<string, string | null>();
+
+/**
+ * Maximum cache entries to prevent unbounded growth.
+ * Evict oldest entries when limit is reached.
+ */
+const MAX_CACHE_SIZE = 200;
+
+/**
+ * Evict oldest cache entry (simple FIFO eviction).
+ */
+function evictOldestCacheEntry(): void {
+	const firstKey = gitRootCache.keys().next().value;
+	if (firstKey !== undefined) {
+		gitRootCache.delete(firstKey);
+	}
+}
+
+/**
  * Internal GitMetadata representation - used for collection.
  */
 export interface GitMetadata {
@@ -61,22 +84,49 @@ async function runGit(args: string, cwd: string): Promise<string | null> {
 /**
  * Walk up from a file path to find the nearest .git directory.
  * Stops at the filesystem root.
+ * Uses LRU-style memoization to avoid repeated filesystem walks.
  */
 function findGitRootForPath(filePath: string): string | null {
-	let current = resolve(dirname(filePath));
+	const resolvedPath = resolve(dirname(filePath));
+
+	// Check cache first
+	if (gitRootCache.has(resolvedPath)) {
+		return gitRootCache.get(resolvedPath)!;
+	}
+
+	let current = resolvedPath;
 	const root = '/';
 
 	while (current !== root) {
 		if (existsSync(join(current, '.git'))) {
+			// Cache the result before returning
+			ensureCacheCapacity();
+			gitRootCache.set(resolvedPath, current);
 			return current;
 		}
 		current = dirname(current);
 	}
 
 	// Check root itself
-	if (existsSync(join(root, '.git'))) return root;
+	if (existsSync(join(root, '.git'))) {
+		ensureCacheCapacity();
+		gitRootCache.set(resolvedPath, root);
+		return root;
+	}
 
+	// Cache the negative result as well
+	ensureCacheCapacity();
+	gitRootCache.set(resolvedPath, null);
 	return null;
+}
+
+/**
+ * Ensure cache doesn't exceed max size by evicting oldest entries.
+ */
+function ensureCacheCapacity(): void {
+	while (gitRootCache.size >= MAX_CACHE_SIZE) {
+		evictOldestCacheEntry();
+	}
 }
 
 /**
