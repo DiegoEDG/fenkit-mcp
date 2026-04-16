@@ -11,7 +11,7 @@ export const TOOL_CAPABILITIES: Record<string, ToolCapability> = {
 	select_project: 'write',
 
 	// task read
-	resolve_chat_task: 'read',
+	resolve_session_task: 'read',
 	list_tasks: 'read',
 	search_tasks: 'read',
 	get_task_context_compact: 'read',
