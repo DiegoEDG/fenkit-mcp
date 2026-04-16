@@ -53,7 +53,7 @@ export function renderCompactContext(task: TaskResponse, maxChars: number): stri
 		sections.push(`- Actor: ${String(context.actor || 'n/a')}`);
 		sections.push(`- Tool: ${String(context.tool || 'n/a')}`);
 		sections.push(`- Chat ID: ${String(context.chat_id || context.last_chat_id || 'n/a')}`);
-		sections.push(`- Session ID: ${String(context.session_id || context.last_chat_id || 'n/a')}`);
+		sections.push(`- Session ID: ${String(context.session_id || context.last_session_id || 'n/a')}`);
 		sections.push(`- Last seen: ${String(context.last_seen_at || 'n/a')}`);
 		sections.push('');
 	}
@@ -153,7 +153,7 @@ export function renderTaskLifecycle(task: TaskResponse): string {
 		`- Last tool: ${String(context.last_tool || context.tool || 'n/a')}`,
 		`- Last operation: ${String(context.last_operation_id || 'n/a')}`,
 		`- Chat ID: ${String(context.chat_id || context.last_chat_id || 'n/a')}`,
-		`- Session ID: ${String(context.session_id || context.last_chat_id || 'n/a')}`,
+		`- Session ID: ${String(context.session_id || context.last_session_id || 'n/a')}`,
 		`- Last seen: ${String(context.last_seen_at || task.updatedAt || 'n/a')}`
 	].join('\n');
 }
