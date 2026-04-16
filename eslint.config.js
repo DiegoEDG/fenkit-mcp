@@ -16,10 +16,12 @@ export default tseslint.config(
       sourceType: 'module',
     },
   },
-  {
-    rules: {
-      '@typescript-eslint/no-explicit-any': 'error',
-      '@typescript-eslint/no-unused-vars': [
+	{
+		files: ['src/**/*.ts', 'test/**/*.ts'],
+		rules: {
+			'no-console': 'error',
+			'@typescript-eslint/no-explicit-any': 'error',
+			'@typescript-eslint/no-unused-vars': [
         'error',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],

@@ -25,6 +25,9 @@ import { requireProject } from '@lib/config.js';
 import { getGitMetadata } from '@lib/git.js';
 import { stableHash } from '@lib/observability.js';
 import { buildSuggestedGitCommit } from '@lib/walkthrough-commit.js';
+import { createLogger } from '@lib/logger.js';
+
+const logger = createLogger('lifecycle-gate');
 
 // ─── Fallback Artifacts ──────────────────────────────────────────────────────
 
@@ -113,7 +116,7 @@ export class LifecycleGate {
 		// STEP 1: Check if plan needs to be written
 		// This is the most critical step — plan must exist before work starts
 		if (!state.planWrittenAt) {
-			console.log(`[LifecycleGate] Auto-repairing: plan for task ${targetTaskId}`);
+			logger.info(`Auto-repairing plan for task ${targetTaskId}`);
 
 			const fallbackPlan = _buildFallbackPlan(targetTaskId);
 
@@ -134,7 +137,7 @@ export class LifecycleGate {
 					action: 'plan_written'
 				};
 			} catch (error) {
-				console.error(`[LifecycleGate] Failed to auto-repair plan:`, error);
+				logger.error('Failed to auto-repair plan', error);
 				return {
 					enforced: false,
 					reason: 'not_bound'
@@ -145,7 +148,7 @@ export class LifecycleGate {
 		// STEP 2: Check if in_progress status needs to be set
 		// This should have been set when plan was written
 		if (!state.inProgressAt && state.planWrittenAt) {
-			console.log(`[LifecycleGate] Auto-repairing: in_progress status for task ${targetTaskId}`);
+			logger.info(`Auto-repairing in_progress status for task ${targetTaskId}`);
 
 			try {
 				await this.setStatus(targetTaskId, 'in_progress');
@@ -158,7 +161,7 @@ export class LifecycleGate {
 					action: 'status_updated'
 				};
 			} catch (error) {
-				console.error(`[LifecycleGate] Failed to auto-repair in_progress:`, error);
+				logger.error('Failed to auto-repair in_progress', error);
 				return {
 					enforced: false,
 					reason: 'not_bound'
@@ -169,7 +172,7 @@ export class LifecycleGate {
 		// STEP 3: Check if walkthrough needs to be written
 		// This is checked when the LLM signals completion
 		if (state.inProgressAt && !state.walkthroughWrittenAt) {
-			console.log(`[LifecycleGate] Auto-repairing: walkthrough for task ${targetTaskId}`);
+			logger.info(`Auto-repairing walkthrough for task ${targetTaskId}`);
 
 			const fallbackWalkthrough = _buildFallbackWalkthrough(targetTaskId);
 
@@ -190,7 +193,7 @@ export class LifecycleGate {
 					action: 'walkthrough_written'
 				};
 			} catch (error) {
-				console.error(`[LifecycleGate] Failed to auto-repair walkthrough:`, error);
+				logger.error('Failed to auto-repair walkthrough', error);
 				return {
 					enforced: false,
 					reason: 'not_bound'
@@ -201,7 +204,7 @@ export class LifecycleGate {
 		// STEP 4: Check if in_review status needs to be set
 		// This should have been set when walkthrough was written
 		if (state.walkthroughWrittenAt && !state.inReviewAt) {
-			console.log(`[LifecycleGate] Auto-repairing: in_review status for task ${targetTaskId}`);
+			logger.info(`Auto-repairing in_review status for task ${targetTaskId}`);
 
 			try {
 				await this.setStatus(targetTaskId, 'in_review');
@@ -214,7 +217,7 @@ export class LifecycleGate {
 					action: 'status_updated'
 				};
 			} catch (error) {
-				console.error(`[LifecycleGate] Failed to auto-repair in_review:`, error);
+				logger.error('Failed to auto-repair in_review', error);
 				return {
 					enforced: false,
 					reason: 'not_bound'

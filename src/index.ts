@@ -10,8 +10,10 @@ import { registerSetupTools, setupHandlers, CLIENTS, ClientType } from './tools/
 import { registerContextResources } from './resources/contextual.js';
 import { registerLifecyclePrompts } from './prompts/lifecycle.js';
 import { assertToolCapabilityRegistry } from './lib/tool-capabilities.js';
+import { createLogger } from './lib/logger.js';
 
 type ServerMode = 'read-runtime' | 'write-runtime' | 'admin';
+const logger = createLogger('index');
 
 function parseMode(args: string[]): { mode: ServerMode; args: string[] } {
 	const modeArg = args.find((arg) => arg.startsWith('--mode='));
@@ -39,7 +41,7 @@ async function main(): Promise<void> {
 	if (args[0] === 'setup') {
 		const client = args[1] as ClientType;
 		if (!client || !CLIENTS.includes(client)) {
-			console.error(`Usage: fenkit-mcp setup <${CLIENTS.join('|')}>`);
+			logger.error(`Usage: fenkit-mcp setup <${CLIENTS.join('|')}>`);
 			process.exit(1);
 		}
 
@@ -47,15 +49,15 @@ async function main(): Promise<void> {
 			// In CLI mode, we assume argv[1] is the absolute path to the current script
 			const serverPath = process.argv[1] ?? '';
 			const result = setupHandlers[client](serverPath);
-			console.log(`✅ Fenkit MCP configured for ${client}`);
-			console.log(`Action: ${result.action}`);
-			console.log(`Config path: ${result.path}`);
-			console.log(`\nNext steps:`);
-			console.log(`1. Restart ${client} to load the new config.`);
-			console.log(`2. Call 'get_status' to verify the connection.`);
+			logger.info(`✅ Fenkit MCP configured for ${client}`);
+			logger.info(`Action: ${result.action}`);
+			logger.info(`Config path: ${result.path}`);
+			logger.info('Next steps:');
+			logger.info(`1. Restart ${client} to load the new config.`);
+			logger.info(`2. Call 'get_status' to verify the connection.`);
 			process.exit(0);
 		} catch (error) {
-			console.error(`❌ Error setting up ${client}:`, error instanceof Error ? error.message : error);
+			logger.error(`❌ Error setting up ${client}:`, error instanceof Error ? error.message : error);
 			process.exit(1);
 		}
 	}
@@ -82,6 +84,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-	console.error('Fatal error starting MCP server:', error);
+	logger.error('Fatal error starting MCP server', error);
 	process.exit(1);
 });

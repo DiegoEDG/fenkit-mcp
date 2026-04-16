@@ -14,6 +14,9 @@
 
 import type { BoundTask, LifecycleState } from './lifecycle-config.js';
 import { LifecycleStep } from './lifecycle-config.js';
+import { createLogger } from '@lib/logger.js';
+
+const logger = createLogger('binding-tracker');
 
 /**
  * Singleton class that tracks all MCP-bound tasks in the current process.
@@ -85,7 +88,7 @@ export class BindingTracker {
 		this.boundTasks.set(task.id, boundTask);
 		this.currentTaskId = task.id;
 
-		console.debug(`[BindingTracker] Task bound: ${task.id} (status: ${task.status})`);
+		logger.debug(`Task bound: ${task.id} (status: ${task.status})`);
 	}
 
 	/**
@@ -107,7 +110,7 @@ export class BindingTracker {
 	 */
 	setCurrentTask(taskId: string): void {
 		if (!this.boundTasks.has(taskId)) {
-			console.warn(`[BindingTracker] Cannot set current task to unbound: ${taskId}`);
+			logger.warn(`Cannot set current task to unbound: ${taskId}`);
 			return;
 		}
 		this.currentTaskId = taskId;
@@ -198,11 +201,11 @@ export class BindingTracker {
 	markPlanWritten(taskId: string): void {
 		const bound = this.boundTasks.get(taskId);
 		if (!bound) {
-			console.warn(`[BindingTracker] Cannot mark plan written for unbound task: ${taskId}`);
+			logger.warn(`Cannot mark plan written for unbound task: ${taskId}`);
 			return;
 		}
 		bound.lifecycle.planWrittenAt = new Date();
-		console.debug(`[BindingTracker] Plan written for: ${taskId}`);
+		logger.debug(`Plan written for: ${taskId}`);
 	}
 
 	/**
@@ -211,11 +214,11 @@ export class BindingTracker {
 	markInProgress(taskId: string): void {
 		const bound = this.boundTasks.get(taskId);
 		if (!bound) {
-			console.warn(`[BindingTracker] Cannot mark in_progress for unbound task: ${taskId}`);
+			logger.warn(`Cannot mark in_progress for unbound task: ${taskId}`);
 			return;
 		}
 		bound.lifecycle.inProgressAt = new Date();
-		console.debug(`[BindingTracker] Status set to in_progress for: ${taskId}`);
+		logger.debug(`Status set to in_progress for: ${taskId}`);
 	}
 
 	/**
@@ -224,11 +227,11 @@ export class BindingTracker {
 	markWalkthroughWritten(taskId: string): void {
 		const bound = this.boundTasks.get(taskId);
 		if (!bound) {
-			console.warn(`[BindingTracker] Cannot mark walkthrough written for unbound task: ${taskId}`);
+			logger.warn(`Cannot mark walkthrough written for unbound task: ${taskId}`);
 			return;
 		}
 		bound.lifecycle.walkthroughWrittenAt = new Date();
-		console.debug(`[BindingTracker] Walkthrough written for: ${taskId}`);
+		logger.debug(`Walkthrough written for: ${taskId}`);
 	}
 
 	/**
@@ -237,11 +240,11 @@ export class BindingTracker {
 	markInReview(taskId: string): void {
 		const bound = this.boundTasks.get(taskId);
 		if (!bound) {
-			console.warn(`[BindingTracker] Cannot mark in_review for unbound task: ${taskId}`);
+			logger.warn(`Cannot mark in_review for unbound task: ${taskId}`);
 			return;
 		}
 		bound.lifecycle.inReviewAt = new Date();
-		console.debug(`[BindingTracker] Status set to in_review for: ${taskId}`);
+		logger.debug(`Status set to in_review for: ${taskId}`);
 	}
 
 	/**
@@ -252,7 +255,7 @@ export class BindingTracker {
 		if (this.currentTaskId === taskId) {
 			this.currentTaskId = null;
 		}
-		console.debug(`[BindingTracker] Task unbound: ${taskId}`);
+		logger.debug(`Task unbound: ${taskId}`);
 	}
 
 	/**
@@ -261,7 +264,7 @@ export class BindingTracker {
 	unbindAll(): void {
 		this.boundTasks.clear();
 		this.currentTaskId = null;
-		console.debug('[BindingTracker] All tasks unbound');
+		logger.debug('All tasks unbound');
 	}
 
 	/**

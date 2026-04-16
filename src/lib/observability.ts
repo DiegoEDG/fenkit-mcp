@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createLogger } from './logger.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -12,6 +13,7 @@ interface ToolMetrics {
 }
 
 const metrics = new Map<string, ToolMetrics>();
+const logger = createLogger('observability');
 
 function isRecord(value: unknown): value is JsonObject {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -111,7 +113,7 @@ export function trackToolCall(event: {
 		session_id: event.sessionId
 	};
 
-	console.error(`[fenkit-observe] ${JSON.stringify(line)}`);
+	logger.info('tool_call', line);
 }
 
 export function getToolMetricsSnapshot(): Record<string, JsonObject> {

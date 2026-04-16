@@ -1,8 +1,10 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
 import { loadConfig } from './config.js';
 import { getActiveApiUrl, isAllowedApiOrigin, validateServiceUrl } from './security.js';
+import { createLogger } from './logger.js';
 
 let client: AxiosInstance | null = null;
+const logger = createLogger('api');
 
 export function createApiClient(options: { apiUrl: string; token: string }): AxiosInstance {
   const validatedApi = validateServiceUrl(options.apiUrl, 'api');
@@ -61,9 +63,14 @@ export function createApiClient(options: { apiUrl: string; token: string }): Axi
       requestConfig.params = sanitizeObject(requestConfig.params);
     }
 
-    console.error('[DEBUG Axios Interceptor] Method:', requestConfig.method, 'URL:', requestConfig.url);
-    if (requestConfig.data) console.error('[DEBUG Axios Interceptor] Data:', JSON.stringify(requestConfig.data));
-    if (requestConfig.params) console.error('[DEBUG Axios Interceptor] Params:', JSON.stringify(requestConfig.params));
+    logger.debug('Axios interceptor request', {
+      method: requestConfig.method,
+      url: requestConfig.url,
+      hasData: Boolean(requestConfig.data),
+      hasParams: Boolean(requestConfig.params),
+    });
+    if (requestConfig.data) logger.debug('Axios interceptor data', requestConfig.data);
+    if (requestConfig.params) logger.debug('Axios interceptor params', requestConfig.params);
 
     return requestConfig;
   });
