@@ -20,11 +20,11 @@ import {
 	LifecycleStep,
 	isEnforcementActive
 } from './lifecycle-config.js';
-import { getApiClient } from '../lib/api.js';
-import { requireProject } from '../lib/config.js';
-import { getGitMetadata } from '../lib/git.js';
-import { stableHash } from '../lib/observability.js';
-import { buildSuggestedGitCommit } from '../lib/walkthrough-commit.js';
+import { getApiClient } from '@lib/api.js';
+import { requireProject } from '@lib/config.js';
+import { getGitMetadata } from '@lib/git.js';
+import { stableHash } from '@lib/observability.js';
+import { buildSuggestedGitCommit } from '@lib/walkthrough-commit.js';
 
 // ─── Fallback Artifacts ──────────────────────────────────────────────────────
 

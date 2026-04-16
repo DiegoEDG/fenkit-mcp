@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toGitContext, type GitMetadata } from '../../../src/lib/git.js';
+import { toGitContext, type GitMetadata } from '@lib/git.js';
 
 describe('Git Context Adapter', () => {
 	describe('toGitContext', () => {

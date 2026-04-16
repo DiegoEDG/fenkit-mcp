@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getGitMetadata, getGitMetadataForPaths, type GitMetadata } from '../../../src/lib/git.js';
+import { getGitMetadata, getGitMetadataForPaths, type GitMetadata } from '@lib/git.js';
 
 describe('Git Performance Benchmarks', () => {
 	/**
@@ -37,9 +37,10 @@ describe('Git Performance Benchmarks', () => {
 
 		// Verify the time gaps between checks show event loop was responsive
 		// (gaps should be small, not accumulating to the full total time)
-		const maxGap = Math.max(
-			...eventLoopCheckResults.slice(1).map((t, i) => t - eventLoopCheckResults[i])
-		);
+		const sliced = eventLoopCheckResults.slice(1);
+		const maxGap = sliced.length > 0
+			? Math.max(...sliced.map((t, i) => t - eventLoopCheckResults[i]!))
+			: 0;
 
 		// The event loop should respond within reasonable intervals
 		expect(maxGap).toBeLessThan(5000); // No single gap should be huge
@@ -53,7 +54,7 @@ describe('Git Performance Benchmarks', () => {
 
 		// Create an array of file paths pointing to the same repo
 		// (getGitMetadataForPaths will deduplicate and run only once)
-		const filePaths = Array.from({ length: 20 }, (_, i) =>
+		const filePaths = Array.from({ length: 20 }, () =>
 			`/Users/digudev/Documents/DEV/PER/ickit-fb/04-ickit-mcp/src/index.ts`
 		);
 

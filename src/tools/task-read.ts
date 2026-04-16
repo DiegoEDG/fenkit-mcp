@@ -1,19 +1,19 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireProject, saveConfig } from '../lib/config.js';
-import { getApiClient, formatApiError } from '../lib/api.js';
+import { requireProject, saveConfig } from '@lib/config.js';
+import { getApiClient, formatApiError } from '@lib/api.js';
 import { resolveTaskByIdentifier, type TaskResponse } from './task-common.js';
-import { TaskIdentifierSchema } from '../lib/schemas.js';
-import { extractPromptFromHeaders, trackToolCall } from '../lib/observability.js';
-import { clampMaxChars, MAX_ALLOWED_CHARS } from '../lib/compact-context.js';
+import { TaskIdentifierSchema } from '@lib/schemas.js';
+import { extractPromptFromHeaders, trackToolCall } from '@lib/observability.js';
+import { clampMaxChars, MAX_ALLOWED_CHARS } from '@lib/compact-context.js';
 import {
 	renderCompactContext,
 	renderFullContext,
 	renderTaskSection,
 	STATUS_ICONS,
 	SectionSchema
-} from '../lib/task-context-render.js';
-import { bindingTracker } from '../lifecycle/index.js';
+} from '@lib/task-context-render.js';
+import { bindingTracker } from '@lifecycle/index.js';
 const StatusFilterSchema = z
 	.string()
 	.trim()

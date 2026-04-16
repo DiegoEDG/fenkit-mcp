@@ -3,9 +3,9 @@ import { randomBytes } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import open from 'open';
-import { loadConfig, saveConfig } from '../lib/config.js';
-import { createApiClient } from '../lib/api.js';
-import { getActiveApiUrl, getActiveAppUrl, isLocalDevEnabled, validateServiceUrl } from '../lib/security.js';
+import { loadConfig, saveConfig } from '@lib/config.js';
+import { createApiClient } from '@lib/api.js';
+import { getActiveApiUrl, getActiveAppUrl, isLocalDevEnabled, validateServiceUrl } from '@lib/security.js';
 
 interface ProjectResponse {
 	id: string;

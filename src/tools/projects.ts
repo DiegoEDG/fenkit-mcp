@@ -1,19 +1,19 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireAuth, saveConfig } from '../lib/config.js';
-import { getApiClient, formatApiError } from '../lib/api.js';
-import { OperationIdSchema, TokensSchema } from '../lib/schemas.js';
-import { stableHash } from '../lib/observability.js';
+import { requireAuth, saveConfig } from '@lib/config.js';
+import { getApiClient, formatApiError } from '@lib/api.js';
+import { OperationIdSchema, TokensSchema } from '@lib/schemas.js';
+import { stableHash } from '@lib/observability.js';
 import {
 	consumeConfirmationToken,
 	isSensitiveConfirmationEnabled,
 	issueConfirmationToken
-} from '../lib/confirmation.js';
+} from '@lib/confirmation.js';
 import {
 	appendLocalAuditLog,
 	checkLocalIdempotency,
 	recordLocalOperation
-} from '../lib/write-audit.js';
+} from '@lib/write-audit.js';
 
 interface ProjectResponse {
   id: string;

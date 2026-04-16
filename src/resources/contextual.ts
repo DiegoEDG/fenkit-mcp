@@ -1,10 +1,10 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { requireProject } from '../lib/config.js';
-import { getApiClient, formatApiError } from '../lib/api.js';
-import { resolveTaskByIdentifier, type TaskResponse } from '../tools/task-common.js';
-import { getToolMetricsSnapshot } from '../lib/observability.js';
-import { clampMaxChars } from '../lib/compact-context.js';
-import { renderCompactContext, renderTaskLifecycle, renderTaskSection, SectionSchema } from '../lib/task-context-render.js';
+import { requireProject } from '@lib/config.js';
+import { getApiClient, formatApiError } from '@lib/api.js';
+import { resolveTaskByIdentifier, type TaskResponse } from '@tools/task-common.js';
+import { getToolMetricsSnapshot } from '@lib/observability.js';
+import { clampMaxChars } from '@lib/compact-context.js';
+import { renderCompactContext, renderTaskLifecycle, renderTaskSection, SectionSchema } from '@lib/task-context-render.js';
 
 function renderTaskList(title: string, tasks: TaskResponse[]): string {
 	if (tasks.length === 0) return `## ${title}\n\nNo tasks found.`;
