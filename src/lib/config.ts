@@ -49,8 +49,23 @@ export async function loadConfigAsync(): Promise<FnkConfig> {
 
   try {
     const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
-    configCache = { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as FnkConfig;
+    try {
+      configCache = { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as FnkConfig;
+    } catch (parseErr) {
+      // Backup invalid config and return defaults
+      const backupPath = `${CONFIG_FILE}.bak`;
+      try {
+        await fs.copyFile(CONFIG_FILE, backupPath);
+        // eslint-disable-next-line no-console
+        console.warn(`[fnk] Warning: config.json is corrupted (${parseErr instanceof Error ? parseErr.message : 'parse error'}). Backup saved to ${backupPath}. Using defaults.`);
+      } catch {
+        // eslint-disable-next-line no-console
+        console.warn(`[fnk] Warning: config.json is corrupted and could not be backed up. Using defaults.`);
+      }
+      configCache = { ...DEFAULT_CONFIG };
+    }
   } catch {
+    // File read error (doesn't exist, permissions, etc.) - use defaults
     configCache = { ...DEFAULT_CONFIG };
   }
 
@@ -68,7 +83,12 @@ export async function saveConfigAsync(config: Partial<FnkConfig>): Promise<void>
   const current = await loadConfigAsync();
   const merged = { ...current, ...config };
 
-  await fs.writeFile(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
+  try {
+    await fs.writeFile(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
+  } catch (err) {
+    throw new Error(`Failed to save config: ${err instanceof Error ? err.message : 'unknown error'}`);
+  }
+
   if (process.platform !== 'win32') {
     try {
       await fs.chmod(CONFIG_FILE, 0o600);
@@ -120,7 +140,22 @@ export function loadConfig(): FnkConfig {
 
   const raw = fsSync.readFileSync(CONFIG_FILE, 'utf-8');
   cacheValid = false; // Invalidate cache on sync read
-  return { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as FnkConfig;
+
+  try {
+    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) } as FnkConfig;
+  } catch (err) {
+    // Backup invalid config and return defaults
+    const backupPath = `${CONFIG_FILE}.bak`;
+    try {
+      fsSync.copyFileSync(CONFIG_FILE, backupPath);
+      // eslint-disable-next-line no-console
+      console.warn(`[fnk] Warning: config.json is corrupted (${err instanceof Error ? err.message : 'parse error'}). Backup saved to ${backupPath}. Using defaults.`);
+    } catch {
+      // eslint-disable-next-line no-console
+      console.warn(`[fnk] Warning: config.json is corrupted and could not be backed up. Using defaults.`);
+    }
+    return { ...DEFAULT_CONFIG };
+  }
 }
 
 /**
