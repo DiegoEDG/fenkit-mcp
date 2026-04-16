@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { requireProject, saveConfig } from '../config.js';
+import { getApiClient, formatApiError } from '../api.js';
 import { resolveTaskByIdentifier, type TaskResponse } from './task-common.js';
 import { TaskIdentifierSchema } from '../schemas.js';
 import { extractPromptFromHeaders, trackToolCall } from '../observability.js';

@@ -5,6 +5,9 @@ import { promisify } from 'node:util';
 
 const execAsync = promisify(exec);
 
+/**
+ * Internal GitMetadata representation - used for collection.
+ */
 export interface GitMetadata {
 	branch: string | null;
 	commitHash: string | null;
@@ -12,6 +15,34 @@ export interface GitMetadata {
 	status: 'clean' | 'dirty' | 'unknown';
 	repoName: string | null;
 	repoPath: string;
+}
+
+/**
+ * Unified Git Context contract for MCP tools.
+ * This is the canonical interface used across the codebase.
+ */
+export interface GitContext {
+	branch: string | null;
+	commitHash: string | null;
+	remoteUrl: string | null;
+	status: string;
+	repoName: string | null;
+	repoPath: string;
+}
+
+/**
+ * Convert internal GitMetadata to the unified GitContext contract.
+ * Use this at boundary layers to maintain type safety.
+ */
+export function toGitContext(metadata: GitMetadata): GitContext {
+	return {
+		branch: metadata.branch,
+		commitHash: metadata.commitHash,
+		remoteUrl: metadata.remoteUrl,
+		status: metadata.status,
+		repoName: metadata.repoName,
+		repoPath: metadata.repoPath
+	};
 }
 
 async function runGit(args: string, cwd: string): Promise<string | null> {

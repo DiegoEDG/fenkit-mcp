@@ -16,7 +16,7 @@ import {
 import { resolveTaskByIdentifier } from './task-common.js';
 import { stableHash, trackToolCall, extractPromptFromHeaders } from '../observability.js';
 import { withOptional } from '../utils.js';
-import { getGitMetadata, resolveAffectedRepos } from '../git.js';
+import { getGitMetadata, resolveAffectedRepos, type GitContext } from '../git.js';
 import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../confirmation.js';
 import { bindingTracker } from '../lifecycle/index.js';
 
@@ -118,15 +118,6 @@ const WRITE_RETRY_ATTEMPTS = 3;
 const WRITE_RETRY_BACKOFF_MS = 250;
 const DEFAULT_AGENT = 'mcp-client';
 const DEFAULT_MODEL = 'unknown';
-
-interface GitContext {
-	branch: string | null;
-	commitHash: string | null;
-	remoteUrl: string | null;
-	status: string;
-	repoName: string | null;
-	repoPath: string;
-}
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
