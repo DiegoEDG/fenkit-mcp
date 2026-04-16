@@ -8,4 +8,14 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   dts: false,
+  esbuildOptions: (options) => {
+    options.alias = {
+      '@lib': './src/lib',
+      '@tools': './src/tools',
+      '@lifecycle': './src/lifecycle',
+      '@prompts': './src/prompts',
+      '@resources': './src/resources',
+      '@': './src',
+    };
+  },
 });
