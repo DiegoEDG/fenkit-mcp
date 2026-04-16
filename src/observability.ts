@@ -87,6 +87,7 @@ export function trackToolCall(event: {
 	retries?: number;
 	chatId?: string;
 	prompt?: string;
+	sessionId?: string;
 }): void {
 	const stat = getMetric(event.tool);
 	stat.calls += 1;
@@ -106,7 +107,8 @@ export function trackToolCall(event: {
 		duplicateAvoided: !!event.duplicateAvoided,
 		retries: event.retries || 0,
 		chatId: event.chatId,
-		prompt: event.prompt
+		prompt: event.prompt,
+		session_id: event.sessionId
 	};
 
 	console.error(`[fenkit-observe] ${JSON.stringify(line)}`);
