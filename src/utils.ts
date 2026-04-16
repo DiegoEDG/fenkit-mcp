@@ -39,15 +39,15 @@ export function truncateDeterministic(content: string, maxChars: number): string
 }
 
 /**
- * Conditionally spreads a property into an object.
+ * Conditionally includes a property in an object only if value is not undefined.
  * Use this with exactOptionalPropertyTypes to avoid passing explicit undefined.
  *
  * @example
  * // Instead of { actor: options.actor } which passes undefined
- * const obj = { ...conditionalSpread('actor', options.actor) }
+ * const obj = { ...withOptional('actor', options.actor) }
  * // Result: { actor: 'value' } or {} when actor is undefined
  */
-export function conditionalSpread<T>(key: string, value: T): Record<string, T> {
+export function withOptional<T>(key: string, value: T): {} | { [K in keyof { [key: string]: T }]: T } {
 	if (value !== undefined) {
 		return { [key]: value };
 	}
@@ -59,13 +59,13 @@ export function conditionalSpread<T>(key: string, value: T): Record<string, T> {
  * Useful for constructing API payloads with exactOptionalPropertyTypes.
  *
  * @example
- * const payload = buildOptionalObject({
+ * const payload = withOptionalEntries({
  *   actor: options.actor,
  *   ttlMs: options.ttlMs,
  *   status: options.status
  * });
  */
-export function buildOptionalObject<T extends Record<string, unknown>>(entries: T): Partial<T> {
+export function withOptionalEntries<T extends Record<string, unknown>>(entries: T): Partial<T> {
 	const result: Partial<T> = {};
 	for (const [key, value] of Object.entries(entries)) {
 		if (value !== undefined) {
@@ -73,4 +73,20 @@ export function buildOptionalObject<T extends Record<string, unknown>>(entries: 
 		}
 	}
 	return result;
+}
+
+/**
+ * Alias for backward compatibility - prefer withOptional
+ * @deprecated Use withOptional instead
+ */
+export function conditionalSpread<T>(key: string, value: T): {} | { [K in keyof { [key: string]: T }]: T } {
+	return withOptional(key, value);
+}
+
+/**
+ * Alias for backward compatibility - prefer withOptionalEntries
+ * @deprecated Use withOptionalEntries instead
+ */
+export function buildOptionalObject<T extends Record<string, unknown>>(entries: T): Partial<T> {
+	return withOptionalEntries(entries);
 }

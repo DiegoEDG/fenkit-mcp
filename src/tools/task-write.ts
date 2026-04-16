@@ -14,7 +14,8 @@ import {
 	WalkthroughSchema
 } from '../schemas.js';
 import { resolveTaskByIdentifier } from './task-common.js';
-import { extractPromptFromHeaders, stableHash, trackToolCall } from '../observability.js';
+import { stableHash, trackToolCall, extractPromptFromHeaders } from '../observability.js';
+import { withOptional } from '../utils.js';
 import { getGitMetadata, resolveAffectedRepos } from '../git.js';
 import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../confirmation.js';
 import { bindingTracker } from '../lifecycle/index.js';
@@ -123,6 +124,8 @@ interface GitContext {
 	commitHash: string | null;
 	remoteUrl: string | null;
 	status: string;
+	repoName: string | null;
+	repoPath: string;
 }
 
 function delay(ms: number): Promise<void> {
@@ -251,8 +254,11 @@ function resolveModelName(options: { model?: string; requestHeaders?: unknown })
 }
 
 function resolveOperationId(options: { operationId?: string; toolName: string }): string {
-	const provided = pickString(options.operationId);
-	if (provided) return provided;
+	const provided = options.operationId;
+	if (provided !== undefined) {
+		const trimmed = provided.trim();
+		if (trimmed.length > 0) return trimmed;
+	}
 	return `auto:${options.toolName}:${Date.now()}:${randomUUID().slice(0, 8)}`;
 }
 
@@ -284,10 +290,16 @@ function resolveTokens(
 			: 'mixed'
 		: 'estimate';
 
-	return {
-		tokens: { input, output, total: derivedTotal, estimate: estimateValue, reasoning, toolUse },
-		tokenSource
-	};
+	// Build tokens object, omitting undefined values explicitly
+	const tokens: TokenTotals = {};
+	if (input !== undefined) tokens.input = input;
+	if (output !== undefined) tokens.output = output;
+	if (derivedTotal !== undefined) tokens.total = derivedTotal;
+	if (estimateValue !== undefined) tokens.estimate = estimateValue;
+	if (reasoning !== undefined) tokens.reasoning = reasoning;
+	if (toolUse !== undefined) tokens.toolUse = toolUse;
+
+	return { tokens, tokenSource };
 }
 
 function resolveExecutionMode(mode: 'preview' | 'execute' | undefined): 'preview' | 'execute' {
@@ -477,7 +489,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const artifactMode = mode ?? 'mini';
 				const resolvedTokens = resolveTokens(planContent, tokens);
 				const payloadHash = stableHash({ plan: parsed, mode: artifactMode });
-				const resolvedOperationId = resolveOperationId({ operationId: operation_id, toolName: 'update_task_plan' });
+				const resolvedOperationId = resolveOperationId({
+					...withOptional('operationId', operation_id),
+					toolName: 'update_task_plan'
+				});
 				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
 				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 
@@ -564,7 +579,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					changedFields: shouldMoveToInProgress ? ['plan', 'status'] : ['plan'],
 					requestHeaders: extra.requestInfo?.headers,
-					confirmation: confirmationMeta,
+					...withOptional('confirmation', confirmationMeta),
 					gitContext,
 					gitContexts,
 					affectedFiles
@@ -588,7 +603,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
 					chatId: chatContext.chatId,
-					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 
 				// Lifecycle tracking: mark plan as written for bound tasks
@@ -616,7 +631,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					input: { taskId, operation_id },
 					error: error instanceof Error ? error.message : String(error),
 					latencyMs: Date.now() - startedAt,
-					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 				if (error instanceof z.ZodError) {
 					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
@@ -695,7 +710,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const artifactMode = mode ?? 'mini';
 				const payloadHash = stableHash({ walkthrough: parsed, mode: artifactMode });
 				const resolvedOperationId = resolveOperationId({
-					operationId: operation_id,
+					...withOptional('operationId', operation_id),
 					toolName: 'update_task_walkthrough'
 				});
 				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
@@ -784,7 +799,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['status', 'walkthrough'],
 					requestHeaders: extra.requestInfo?.headers,
-					confirmation: confirmationMeta,
+					...withOptional('confirmation', confirmationMeta),
 					gitContext,
 					gitContexts,
 					affectedFiles
@@ -808,7 +823,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
 					chatId: chatContext.chatId,
-					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 
 				// Lifecycle tracking: mark walkthrough as written for bound tasks
@@ -834,7 +849,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					input: { taskId, operation_id },
 					error: error instanceof Error ? error.message : String(error),
 					latencyMs: Date.now() - startedAt,
-					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 				if (error instanceof z.ZodError) {
 					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
@@ -906,7 +921,10 @@ export function registerTaskWriteTools(server: McpServer): void {
 		) => {
 			const startedAt = Date.now();
 			try {
-				const resolvedOperationId = resolveOperationId({ operationId: operation_id, toolName: 'set_task_status' });
+				const resolvedOperationId = resolveOperationId({
+					...withOptional('operationId', operation_id),
+					toolName: 'set_task_status'
+				});
 				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
 				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 				const config = requireProject();
@@ -985,7 +1003,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					changedFields: ['status'],
 					requestHeaders: extra.requestInfo?.headers,
-					confirmation: confirmationMeta,
+					...withOptional('confirmation', confirmationMeta),
 					gitContext
 				});
 
@@ -1004,7 +1022,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					retries: Math.max(0, attemptsUsed - 1),
 					chatId: chatContext.chatId,
-					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 
 				// Lifecycle tracking: mark status change for bound tasks
@@ -1033,7 +1051,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					input: { taskId, status, operation_id },
 					error: error instanceof Error ? error.message : String(error),
 					latencyMs: Date.now() - startedAt,
-					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 				const err = formatApiError(error);
 				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {

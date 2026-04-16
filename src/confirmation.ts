@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { conditionalSpread } from './utils.js';
+import { withOptional } from './utils.js';
 
 interface ConfirmationRecord {
 	id: string;
@@ -63,7 +63,7 @@ export function issueConfirmationToken(options: IssueTokenOptions): {
 		tool: options.tool,
 		payloadHash: options.payloadHash,
 		scope: options.scope,
-		...conditionalSpread('actor', options.actor),
+		...withOptional('actor', options.actor),
 		issuedAt: now,
 		expiresAt: now + ttlMs
 	};
