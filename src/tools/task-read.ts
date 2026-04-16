@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireProject, saveConfig } from '@lib/config.js';
+import { requireProject } from '@lib/config.js';
 import { getApiClient } from '@lib/api.js';
 import { throwAsMcpError } from '@lib/mcp-error.js';
 import { resolveTaskByIdentifier, type TaskResponse } from './task-common.js';
@@ -187,17 +187,6 @@ export function registerTaskReadTools(server: McpServer): void {
 
 				// Bind task to local lifecycle tracker
 				bindingTracker.bind(task, data.project_id, chat_id);
-
-				try {
-					const { data: projects } = await api.get<Array<{ id: string; name: string }>>('/projects');
-					const resolvedProject = projects.find((project) => project.id === data.project_id);
-					saveConfig({
-						currentProjectId: data.project_id,
-						currentProjectName: resolvedProject?.name
-					});
-				} catch {
-					saveConfig({ currentProjectId: data.project_id });
-				}
 
 				const clampedMaxChars = clampMaxChars(maxChars);
 				const compact = renderCompactContext(task, clampedMaxChars);

@@ -2,7 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AxiosInstance } from 'axios';
 import { randomUUID } from 'node:crypto';
-import { requireProject } from '@lib/config.js';
+import { requireProject, saveConfig } from '@lib/config.js';
 import { getApiClient } from '@lib/api.js';
 import { throwAsMcpError } from '@lib/mcp-error.js';
 import {
@@ -1053,6 +1053,97 @@ export function registerTaskWriteTools(server: McpServer): void {
 					};
 				}
 				throwAsMcpError(error, { toolName: 'set_task_status' });
+			}
+		}
+	);
+
+	/**
+	 * Sync active project from binding tracker to local config.
+	 * This tool should ONLY be called in write-runtime mode after a task has been
+	 * resolved in read-runtime mode.
+	 *
+	 * Reads the current bound task from the local binding tracker and persists
+	 * the project ID and name to ~/.fnk/config.json.
+	 *
+	 * This is needed because resolve_session_task in read-runtime mode no longer
+	 * writes to config (to maintain read-only guarantees), so write-runtime must
+	 * sync the project after the fact.
+	 */
+	server.tool(
+		'sync_active_project_from_binding',
+		'Synchronize the active project from the local binding tracker to the local config file. Use this after binding a task in read-runtime mode.',
+		{},
+		async ({}, extra) => {
+			const startedAt = Date.now();
+
+			try {
+				const currentTaskId = bindingTracker.getCurrentTaskId();
+
+				if (!currentTaskId) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: 'Error: No active task bound. Call resolve_session_task in read-runtime mode first, then use this tool in write-runtime mode.'
+							}
+						],
+						isError: true
+					};
+				}
+
+				const boundTask = bindingTracker.getBoundTask(currentTaskId);
+
+				if (!boundTask) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: 'Error: Could not retrieve bound task information.'
+							}
+						],
+						isError: true
+					};
+				}
+
+				// Validate auth and project, then create API client
+				requireProject();
+				const api = getApiClient();
+				const { data: projects } = await api.get<Array<{ id: string; name: string }>>('/projects');
+				const resolvedProject = projects.find((project) => project.id === boundTask.projectId);
+
+				// Write to local config
+				saveConfig({
+					currentProjectId: boundTask.projectId,
+					currentProjectName: resolvedProject?.name
+				});
+
+				trackToolCall({
+					tool: 'sync_active_project_from_binding',
+					input: {},
+					output: { project_id: boundTask.projectId, project_name: resolvedProject?.name },
+					latencyMs: Date.now() - startedAt,
+					sessionId: extra.sessionId,
+					chatId: boundTask.chatId,
+					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+				});
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: `## Project Synced\n\n- project_id: ${boundTask.projectId}\n- project_name: ${resolvedProject?.name || '(unknown)'}\n\nThe active project has been written to \`~/.fnk/config.json\`.`
+						}
+					]
+				};
+			} catch (error) {
+				trackToolCall({
+					tool: 'sync_active_project_from_binding',
+					input: {},
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+				});
+				throwAsMcpError(error, { toolName: 'sync_active_project_from_binding' });
 			}
 		}
 	);

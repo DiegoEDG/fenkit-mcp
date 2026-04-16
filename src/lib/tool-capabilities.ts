@@ -24,6 +24,7 @@ export const TOOL_CAPABILITIES: Record<string, ToolCapability> = {
 	update_task_plan: 'write',
 	update_task_walkthrough: 'write',
 	set_task_status: 'write',
+	sync_active_project_from_binding: 'write',
 
 	// setup
 	setup_client: 'admin',
