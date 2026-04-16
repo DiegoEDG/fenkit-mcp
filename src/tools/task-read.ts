@@ -1,7 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireProject } from '../config.js';
-import { getApiClient, formatApiError } from '../api.js';
+import { requireProject, saveConfig } from '../config.js';
 import { resolveTaskByIdentifier, type TaskResponse } from './task-common.js';
 import { TaskIdentifierSchema } from '../schemas.js';
 import { extractPromptFromHeaders, trackToolCall } from '../observability.js';
@@ -198,10 +197,8 @@ export function registerTaskReadTools(server: McpServer): void {
 					saveConfig({ currentProjectId: data.project_id });
 				}
 
-				const options: CompactOptions = {
-					maxChars: clampNumber(maxChars, DEFAULT_MAX_CHARS, 500, MAX_ALLOWED_CHARS)
-				};
-				const compact = renderCompactContext(task, options);
+				const clampedMaxChars = clampMaxChars(maxChars);
+				const compact = renderCompactContext(task, clampedMaxChars);
 				trackToolCall({
 					tool: 'resolve_session_task',
 					input: { chat_id },
@@ -418,12 +415,9 @@ export function registerTaskReadTools(server: McpServer): void {
 				// Bind task to local lifecycle tracker
 				bindingTracker.bind(task, projectId, chatId);
 
-				const options: CompactOptions = {
-					maxChars: clampMaxChars(maxChars)
-				};
-
+				const clampedMaxChars = clampMaxChars(maxChars);
 				return {
-					content: [{ type: 'text' as const, text: renderCompactContext(task, options.maxChars) }]
+					content: [{ type: 'text' as const, text: renderCompactContext(task, clampedMaxChars) }]
 				};
 			} catch (error) {
 				const err = formatApiError(error);
@@ -506,10 +500,10 @@ export function registerTaskReadTools(server: McpServer): void {
 					headers: extra.requestInfo?.headers
 				});
 
-				const options = { maxChars: clampMaxChars(maxChars) };
+				const clampedMaxChars = clampMaxChars(maxChars);
 
 				return {
-					content: [{ type: 'text' as const, text: renderTaskSection(task, section, options.maxChars) }]
+					content: [{ type: 'text' as const, text: renderTaskSection(task, section, clampedMaxChars) }]
 				};
 			} catch (error) {
 				const err = formatApiError(error);
