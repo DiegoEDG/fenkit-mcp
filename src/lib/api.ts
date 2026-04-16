@@ -1,5 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
-import { loadConfig } from './config.js';
+import { loadConfig, loadConfigAsync } from './config.js';
 import { getActiveApiUrl, isAllowedApiOrigin, validateServiceUrl } from './security.js';
 import { createLogger } from './logger.js';
 
@@ -78,10 +78,27 @@ export function createApiClient(options: { apiUrl: string; token: string }): Axi
   return nextClient;
 }
 
+/**
+ * Get or create the shared API client.
+ * Prefer getApiClientAsync() in hot paths to avoid blocking.
+ */
 export function getApiClient(force = false): AxiosInstance {
   if (client && !force) return client;
 
   const config = loadConfig();
+  client = createApiClient({ apiUrl: getActiveApiUrl(), token: config.token });
+
+  return client;
+}
+
+/**
+ * Async version of getApiClient.
+ * Uses non-blocking config loading to avoid stalling event loop.
+ */
+export async function getApiClientAsync(force = false): Promise<AxiosInstance> {
+  if (client && !force) return client;
+
+  const config = await loadConfigAsync();
   client = createApiClient({ apiUrl: getActiveApiUrl(), token: config.token });
 
   return client;

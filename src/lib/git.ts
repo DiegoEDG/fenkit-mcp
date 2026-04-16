@@ -1,4 +1,5 @@
 import { exec } from 'node:child_process';
+import { access, readdir, constants } from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -25,6 +26,19 @@ function evictOldestCacheEntry(): void {
 	const firstKey = gitRootCache.keys().next().value;
 	if (firstKey !== undefined) {
 		gitRootCache.delete(firstKey);
+	}
+}
+
+/**
+ * Async check for .git directory existence.
+ * Uses access with F_OK to avoid unnecessary stat calls.
+ */
+async function hasGitDirAsync(dirPath: string): Promise<boolean> {
+	try {
+		await access(join(dirPath, '.git'), constants.F_OK);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -85,6 +99,7 @@ async function runGit(args: string, cwd: string): Promise<string | null> {
  * Walk up from a file path to find the nearest .git directory.
  * Stops at the filesystem root.
  * Uses LRU-style memoization to avoid repeated filesystem walks.
+ * Synchronous version - use only at startup or for one-off operations.
  */
 function findGitRootForPath(filePath: string): string | null {
 	const resolvedPath = resolve(dirname(filePath));
@@ -121,6 +136,44 @@ function findGitRootForPath(filePath: string): string | null {
 }
 
 /**
+ * Async version of findGitRootForPath.
+ * Uses access() instead of existsSync() to avoid blocking event loop.
+ * Ideal for hot paths with multiple file checks.
+ */
+async function findGitRootForPathAsync(filePath: string): Promise<string | null> {
+	const resolvedPath = resolve(dirname(filePath));
+
+	// Check cache first
+	if (gitRootCache.has(resolvedPath)) {
+		return gitRootCache.get(resolvedPath)!;
+	}
+
+	let current = resolvedPath;
+	const root = '/';
+
+	while (current !== root) {
+		if (await hasGitDirAsync(current)) {
+			ensureCacheCapacity();
+			gitRootCache.set(resolvedPath, current);
+			return current;
+		}
+		current = dirname(current);
+	}
+
+	// Check root itself
+	if (await hasGitDirAsync(root)) {
+		ensureCacheCapacity();
+		gitRootCache.set(resolvedPath, root);
+		return root;
+	}
+
+	// Cache the negative result as well
+	ensureCacheCapacity();
+	gitRootCache.set(resolvedPath, null);
+	return null;
+}
+
+/**
  * Ensure cache doesn't exceed max size by evicting oldest entries.
  */
 function ensureCacheCapacity(): void {
@@ -134,6 +187,7 @@ function ensureCacheCapacity(): void {
  * 1. Current working directory
  * 2. Immediate subdirectories (monorepo packages)
  * Returns the cwd to use for git commands, or undefined if none found.
+ * Synchronous version - use only at startup or for one-off operations.
  */
 function findNearestGitRoot(): string | undefined {
 	const cwd = process.cwd();
@@ -148,6 +202,34 @@ function findNearestGitRoot(): string | undefined {
 			if (entry.isDirectory()) {
 				const subPath = join(cwd, entry.name);
 				if (existsSync(join(subPath, '.git'))) {
+					return subPath;
+				}
+			}
+		}
+	} catch {
+		// Ignore readdir errors
+	}
+
+	return undefined;
+}
+
+/**
+ * Async version of findNearestGitRoot.
+ * Uses access() and readdir() to avoid blocking event loop.
+ */
+async function findNearestGitRootAsync(): Promise<string | undefined> {
+	const cwd = process.cwd();
+
+	// Check if CWD itself is a git repo
+	if (await hasGitDirAsync(cwd)) return cwd;
+
+	// Check immediate subdirectories for .git (monorepo pattern)
+	try {
+		const entries = await readdir(cwd, { withFileTypes: true });
+		for (const entry of entries) {
+			if (entry.isDirectory()) {
+				const subPath = join(cwd, entry.name);
+				if (await hasGitDirAsync(subPath)) {
 					return subPath;
 				}
 			}
@@ -201,8 +283,9 @@ async function collectGitMetadata(repoPath: string): Promise<GitMetadata> {
  * For monorepos, automatically detects the nearest git repo in subdirectories.
  * Returns null values for any field that cannot be resolved.
  * Never throws — always returns a safe result.
+ * Synchronous version - use only at startup or for one-off operations.
  *
- * @deprecated Use getGitMetadataForPaths for multi-repo support.
+ * @deprecated Use getGitMetadataForPathsAsync for multi-repo support.
  */
 export async function getGitMetadata(): Promise<GitMetadata> {
 	const gitRoot = findNearestGitRoot();
@@ -222,16 +305,47 @@ export async function getGitMetadata(): Promise<GitMetadata> {
 }
 
 /**
+ * Async version of getGitMetadata.
+ * Uses non-blocking FS to avoid stalling event loop.
+ */
+export async function getGitMetadataAsync(): Promise<GitMetadata> {
+	const gitRoot = await findNearestGitRootAsync();
+
+	if (!gitRoot) {
+		return {
+			branch: null,
+			commitHash: null,
+			remoteUrl: null,
+			status: 'unknown',
+			repoName: null,
+			repoPath: process.cwd()
+		};
+	}
+
+	return collectGitMetadata(gitRoot);
+}
+
+/**
  * Find the git root for a specific file path by walking up the directory tree.
  * Returns null if no git repo is found.
+ * Synchronous version - use only at startup or for one-off operations.
  */
 export function findGitRoot(filePath: string): string | null {
 	return findGitRootForPath(filePath);
 }
 
 /**
+ * Async version of findGitRoot.
+ * Uses non-blocking FS to avoid stalling event loop.
+ */
+export async function findGitRootAsync(filePath: string): Promise<string | null> {
+	return findGitRootForPathAsync(filePath);
+}
+
+/**
  * Get git metadata for a single file path.
  * Walks up from the file's directory to find the nearest .git.
+ * Synchronous version - use only at startup or for one-off operations.
  */
 export async function getGitMetadataForPath(filePath: string): Promise<GitMetadata | null> {
 	const gitRoot = findGitRootForPath(filePath);
@@ -240,10 +354,20 @@ export async function getGitMetadataForPath(filePath: string): Promise<GitMetada
 }
 
 /**
+ * Async version of getGitMetadataForPath.
+ * Uses async git root lookup to avoid blocking event loop.
+ */
+export async function getGitMetadataForPathAsync(filePath: string): Promise<GitMetadata | null> {
+	const gitRoot = await findGitRootForPathAsync(filePath);
+	if (!gitRoot) return null;
+	return collectGitMetadata(gitRoot);
+}
+
+/**
  * Get git metadata for multiple file paths.
  * Deduplicates by repoPath so each repo appears only once.
  * Runs all repo collections in parallel for better performance.
- * Returns an array of unique GitMetadata objects.
+ * Synchronous version - use only at startup or one-off operations.
  */
 export async function getGitMetadataForPaths(filePaths: string[]): Promise<GitMetadata[]> {
 	const repoMap = new Map<string, GitMetadata>();
@@ -269,12 +393,48 @@ export async function getGitMetadataForPaths(filePaths: string[]): Promise<GitMe
 }
 
 /**
+ * Async version of getGitMetadataForPaths.
+ * Uses async git root lookup to avoid blocking event loop.
+ */
+export async function getGitMetadataForPathsAsync(filePaths: string[]): Promise<GitMetadata[]> {
+	const repoMap = new Map<string, GitMetadata>();
+
+	// Collect all git roots using async lookup
+	const gitRoots = new Set<string>();
+	for (const filePath of filePaths) {
+		const gitRoot = await findGitRootForPathAsync(filePath);
+		if (gitRoot) gitRoots.add(gitRoot);
+	}
+
+	// Run all repo collections in parallel
+	const metadataList = await Promise.all(
+		Array.from(gitRoots).map((gitRoot) => collectGitMetadata(gitRoot))
+	);
+
+	// Build the map (deduplication is automatic since we used a Set)
+	for (const metadata of metadataList) {
+		repoMap.set(metadata.repoPath, metadata);
+	}
+
+	return Array.from(repoMap.values());
+}
+
+/**
  * Resolve which repos are affected by a set of changed files.
  * Groups files by their git root and returns metadata for each unique repo.
+ * Synchronous version - use only at startup or one-off operations.
  *
  * @param changedFiles - Array of file paths that were modified
  * @returns Array of GitMetadata, one per affected repo
  */
 export async function resolveAffectedRepos(changedFiles: string[]): Promise<GitMetadata[]> {
 	return getGitMetadataForPaths(changedFiles);
+}
+
+/**
+ * Async version of resolveAffectedRepos.
+ * Uses non-blocking FS to avoid stalling event loop.
+ */
+export async function resolveAffectedReposAsync(changedFiles: string[]): Promise<GitMetadata[]> {
+	return getGitMetadataForPathsAsync(changedFiles);
 }

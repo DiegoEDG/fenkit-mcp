@@ -2,8 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AxiosInstance } from 'axios';
 import { randomUUID } from 'node:crypto';
-import { requireProject, saveConfig } from '@lib/config.js';
-import { getApiClient } from '@lib/api.js';
+import { requireProjectAsync, saveConfigAsync } from '@lib/config.js';
+import { getApiClientAsync } from '@lib/api.js';
 import { throwAsMcpError } from '@lib/mcp-error.js';
 import {
 	ArtifactModeSchema,
@@ -491,11 +491,11 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
 				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 
-				const config = requireProject();
+				const config = await requireProjectAsync();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 
-				const api = getApiClient();
+				const api = await getApiClientAsync();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
 				const targetStatus = resolvePlanLifecycleStatus(currentTask.status);
 const shouldMoveToInProgress = targetStatus !== currentTask.status;
@@ -753,11 +753,11 @@ const shouldMoveToInProgress = targetStatus !== currentTask.status;
 				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
 				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
 
-				const config = requireProject();
+				const config = await requireProjectAsync();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 
-				const api = getApiClient();
+				const api = await getApiClientAsync();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
 				const walkthroughContent = renderWalkthroughMarkdown(parsed);
 				const resolvedTokens = resolveTokens(walkthroughContent, tokens);
@@ -1015,10 +1015,10 @@ const confirmationScope = `task:${projectId}:${currentTask.id}`;
 				});
 				const resolvedAgent = resolveAgentName({ agent, requestHeaders: extra.requestInfo?.headers });
 				const resolvedModel = resolveModelName({ model, requestHeaders: extra.requestInfo?.headers });
-				const config = requireProject();
+				const config = await requireProjectAsync();
 				const projectId = config.currentProjectId;
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
-				const api = getApiClient();
+				const api = await getApiClientAsync();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
 const payloadHash = stableHash({ status });
@@ -1289,13 +1289,13 @@ const payloadHash = stableHash({ status });
 				}
 
 				// Validate auth and project, then create API client
-				requireProject();
-				const api = getApiClient();
+				await requireProjectAsync();
+				const api = await getApiClientAsync();
 				const { data: projects } = await api.get<Array<{ id: string; name: string }>>('/projects');
 				const resolvedProject = projects.find((project) => project.id === boundTask.projectId);
 
 				// Write to local config
-				saveConfig({
+				await saveConfigAsync({
 					currentProjectId: boundTask.projectId,
 					currentProjectName: resolvedProject?.name
 				});

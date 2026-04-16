@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import open from 'open';
-import { loadConfig, saveConfig } from '@lib/config.js';
+import { loadConfigAsync, saveConfigAsync } from '@lib/config.js';
 import { createApiClient } from '@lib/api.js';
 import { getActiveApiUrl, getActiveAppUrl, isLocalDevEnabled, validateServiceUrl } from '@lib/security.js';
 
@@ -255,7 +255,7 @@ export function registerAuthTools(
 			};
 		}
 
-		const configUpdate: Parameters<typeof saveConfig>[0] = {
+		const configUpdate: Parameters<typeof saveConfigAsync>[0] = {
 			token
 		};
 
@@ -276,7 +276,7 @@ export function registerAuthTools(
 			autoSelectedProjectName = project.name;
 		}
 
-		saveConfig(configUpdate);
+		await saveConfigAsync(configUpdate);
 
 		let successMessage = '✅ Authenticated successfully! Token saved to ~/.fnk/config.json.';
 		if (autoSelectedProjectName) {
@@ -324,7 +324,7 @@ export function registerAuthTools(
 				openWorldHint: false
 			},
 			async () => {
-				const config = loadConfig();
+				const config = await loadConfigAsync();
 				const authenticated = !!config.token;
 				const hasProject = !!config.currentProjectId;
 

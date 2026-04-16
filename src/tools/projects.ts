@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireAuth, saveConfig } from '@lib/config.js';
-import { getApiClient } from '@lib/api.js';
+import { requireAuth, saveConfigAsync } from '@lib/config.js';
+import { getApiClientAsync } from '@lib/api.js';
 import { throwAsMcpError } from '@lib/mcp-error.js';
 import { OperationIdSchema, TokensSchema } from '@lib/schemas.js';
 import { stableHash } from '@lib/observability.js';
@@ -11,9 +11,9 @@ import {
 	issueConfirmationToken
 } from '@lib/confirmation.js';
 import {
-	appendLocalAuditLog,
-	checkLocalIdempotency,
-	recordLocalOperation
+	appendLocalAuditLogAsync,
+	checkLocalIdempotencyAsync,
+	recordLocalOperationAsync
 } from '@lib/write-audit.js';
 
 interface ProjectResponse {
@@ -40,8 +40,8 @@ export function registerProjectTools(server: McpServer): void {
     },
     async () => {
       try {
-        requireAuth();
-        const api = getApiClient();
+requireAuth();
+        const api = await getApiClientAsync();
         const { data } = await api.get<ProjectResponse[]>('/projects');
 
         if (data.length === 0) {
@@ -150,7 +150,7 @@ export function registerProjectTools(server: McpServer): void {
     async ({ projectId, operation_id, model, agent, tokens, mode, confirmation_token }) => {
       try {
         const config = requireAuth();
-        const api = getApiClient();
+        const api = await getApiClientAsync();
         const { data } = await api.get<ProjectResponse[]>('/projects');
 
         const selected = data.find((p) => p.id === projectId || p.id.startsWith(projectId));
@@ -222,7 +222,7 @@ export function registerProjectTools(server: McpServer): void {
           });
         }
 
-        const localIdempotency = checkLocalIdempotency(
+        const localIdempotency = await checkLocalIdempotencyAsync(
           'select_project',
           operationId,
           payloadHash,
@@ -249,12 +249,12 @@ export function registerProjectTools(server: McpServer): void {
           };
         }
 
-        saveConfig({
+        await saveConfigAsync({
           currentProjectId: selected.id,
           currentProjectName: selected.name,
         });
-        recordLocalOperation('select_project', operationId, payloadHash);
-        appendLocalAuditLog({
+        await recordLocalOperationAsync('select_project', operationId, payloadHash);
+        await appendLocalAuditLogAsync({
           tool: 'select_project',
           operation_id: operationId,
           payload_hash: payloadHash,
