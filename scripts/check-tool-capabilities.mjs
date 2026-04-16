@@ -6,7 +6,7 @@ const VALID = new Set(['read', 'write', 'admin']);
 
 function main() {
 	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-	const sourcePath = path.join(root, 'src', 'tool-capabilities.ts');
+	const sourcePath = path.join(root, 'src', 'lib', 'tool-capabilities.ts');
 	const content = fs.readFileSync(sourcePath, 'utf-8');
 	const regex = /^\s*([a-zA-Z0-9_]+):\s*'([a-z-]+)'/gm;
 	const seen = new Set();

@@ -1,10 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireProject } from '../config.js';
-import { getApiClient } from '../api.js';
+import { requireProject } from '../lib/config.js';
+import { getApiClient } from '../lib/api.js';
 import { resolveTaskByIdentifier } from '../tools/task-common.js';
-import { clampMaxChars } from '../compact-context.js';
-import { renderCompactContext, renderTaskSection, SectionSchema } from '../task-context-render.js';
+import { clampMaxChars } from '../lib/compact-context.js';
+import { renderCompactContext, renderTaskSection, SectionSchema } from '../lib/task-context-render.js';
 
 export function registerLifecyclePrompts(server: McpServer): void {
 	server.registerPrompt(

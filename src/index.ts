@@ -9,7 +9,7 @@ import { registerTaskWriteTools } from './tools/task-write.js';
 import { registerSetupTools, setupHandlers, CLIENTS, ClientType } from './tools/setup.js';
 import { registerContextResources } from './resources/contextual.js';
 import { registerLifecyclePrompts } from './prompts/lifecycle.js';
-import { assertToolCapabilityRegistry } from './tool-capabilities.js';
+import { assertToolCapabilityRegistry } from './lib/tool-capabilities.js';
 
 type ServerMode = 'read-runtime' | 'write-runtime' | 'admin';
 

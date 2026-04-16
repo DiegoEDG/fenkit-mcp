@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { compactNarrative } from './compact-context.js';
 import { stripPrivate, stripPrivateDeep, truncateDeterministic } from './utils.js';
-import type { TaskResponse } from './tools/task-common.js';
+import type { TaskResponse } from '../tools/task-common.js';
 
 export const STATUS_ICONS: Record<string, string> = {
 	todo: '📋',

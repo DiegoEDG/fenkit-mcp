@@ -47,11 +47,11 @@ export function truncateDeterministic(content: string, maxChars: number): string
  * const obj = { ...withOptional('actor', options.actor) }
  * // Result: { actor: 'value' } or {} when actor is undefined
  */
-export function withOptional<T>(key: string, value: T): {} | { [K in keyof { [key: string]: T }]: T } {
+export function withOptional<T>(key: string, value: T): Record<string, never> | { [K in keyof { [key: string]: T }]: T } {
 	if (value !== undefined) {
 		return { [key]: value };
 	}
-	return {};
+	return {} as Record<string, never>;
 }
 
 /**
@@ -79,7 +79,7 @@ export function withOptionalEntries<T extends Record<string, unknown>>(entries: 
  * Alias for backward compatibility - prefer withOptional
  * @deprecated Use withOptional instead
  */
-export function conditionalSpread<T>(key: string, value: T): {} | { [K in keyof { [key: string]: T }]: T } {
+export function conditionalSpread<T>(key: string, value: T): Record<string, never> | { [K in keyof { [key: string]: T }]: T } {
 	return withOptional(key, value);
 }
 

@@ -1,19 +1,19 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { requireAuth, saveConfig } from '../config.js';
-import { getApiClient, formatApiError } from '../api.js';
-import { OperationIdSchema, TokensSchema } from '../schemas.js';
-import { stableHash } from '../observability.js';
+import { requireAuth, saveConfig } from '../lib/config.js';
+import { getApiClient, formatApiError } from '../lib/api.js';
+import { OperationIdSchema, TokensSchema } from '../lib/schemas.js';
+import { stableHash } from '../lib/observability.js';
 import {
 	consumeConfirmationToken,
 	isSensitiveConfirmationEnabled,
 	issueConfirmationToken
-} from '../confirmation.js';
+} from '../lib/confirmation.js';
 import {
 	appendLocalAuditLog,
 	checkLocalIdempotency,
 	recordLocalOperation
-} from '../write-audit.js';
+} from '../lib/write-audit.js';
 
 interface ProjectResponse {
   id: string;
@@ -49,7 +49,7 @@ export function registerProjectTools(server: McpServer): void {
           };
         }
 
-        const { loadConfig } = await import('../config.js');
+        const { loadConfig } = await import('../lib/config.js');
         const config = loadConfig();
 
         const lines = data.map((p) => {

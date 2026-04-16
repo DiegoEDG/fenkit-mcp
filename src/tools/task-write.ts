@@ -2,8 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AxiosInstance } from 'axios';
 import { randomUUID } from 'node:crypto';
-import { requireProject } from '../config.js';
-import { getApiClient, formatApiError } from '../api.js';
+import { requireProject } from '../lib/config.js';
+import { getApiClient, formatApiError } from '../lib/api.js';
 import {
 	ArtifactModeSchema,
 	OperationIdSchema,
@@ -12,12 +12,12 @@ import {
 	TaskStatusSchema,
 	TokensSchema,
 	WalkthroughSchema
-} from '../schemas.js';
+} from '../lib/schemas.js';
 import { resolveTaskByIdentifier } from './task-common.js';
-import { stableHash, trackToolCall, extractPromptFromHeaders } from '../observability.js';
-import { withOptional } from '../utils.js';
-import { getGitMetadata, resolveAffectedRepos, type GitContext } from '../git.js';
-import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../confirmation.js';
+import { stableHash, trackToolCall, extractPromptFromHeaders } from '../lib/observability.js';
+import { withOptional } from '../lib/utils.js';
+import { getGitMetadata, resolveAffectedRepos, type GitContext } from '../lib/git.js';
+import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '../lib/confirmation.js';
 import { bindingTracker } from '../lifecycle/index.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
