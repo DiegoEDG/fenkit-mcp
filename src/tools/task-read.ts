@@ -1,4 +1,5 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { requireProject } from '@lib/config.js';
 import { getApiClient } from '@lib/api.js';
@@ -15,6 +16,15 @@ import {
 	SectionSchema
 } from '@lib/task-context-render.js';
 import { bindingTracker } from '@lifecycle/index.js';
+
+/**
+ * Get chatId from headers or generate a unique per-request fallback.
+ * Using UUID instead of 'unknown' ensures isolated lifecycle context per client.
+ */
+function getOrGenerateChatId(headers?: unknown): string {
+	const chatId = getHeaderString(headers, CHAT_ID_HEADER_KEYS);
+	return chatId ?? randomUUID();
+}
 const StatusFilterSchema = z
 	.string()
 	.trim()
@@ -392,7 +402,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
-				const chatId = getHeaderString(extra.requestInfo?.headers, CHAT_ID_HEADER_KEYS) ?? 'unknown';
+				const chatId = getOrGenerateChatId(extra.requestInfo?.headers);
 				await syncChatTaskBindingHeartbeat({
 					projectId,
 					task,
@@ -432,7 +442,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
 				const api = getApiClient();
 				const task = await resolveTaskByIdentifier(api, projectId, taskId);
-				const chatId = getHeaderString(extra.requestInfo?.headers, CHAT_ID_HEADER_KEYS) ?? 'unknown';
+				const chatId = getOrGenerateChatId(extra.requestInfo?.headers);
 				await syncChatTaskBindingHeartbeat({
 					projectId,
 					task,
