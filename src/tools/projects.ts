@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { requireAuth, saveConfig } from '@lib/config.js';
-import { getApiClient, formatApiError } from '@lib/api.js';
+import { getApiClient } from '@lib/api.js';
+import { throwAsMcpError } from '@lib/mcp-error.js';
 import { OperationIdSchema, TokensSchema } from '@lib/schemas.js';
 import { stableHash } from '@lib/observability.js';
 import {
@@ -66,8 +67,7 @@ export function registerProjectTools(server: McpServer): void {
           ],
         };
       } catch (error) {
-        const err = formatApiError(error);
-        return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+        throwAsMcpError(error, { toolName: 'list_projects' });
       }
     },
   );
@@ -100,8 +100,7 @@ export function registerProjectTools(server: McpServer): void {
           ],
         };
       } catch (error) {
-        const err = formatApiError(error);
-        return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+        throwAsMcpError(error, { toolName: 'get_active_project' });
       }
     },
   );
@@ -279,8 +278,7 @@ export function registerProjectTools(server: McpServer): void {
           ],
         };
       } catch (error) {
-        const err = formatApiError(error);
-        return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+        throwAsMcpError(error, { toolName: 'select_project' });
       }
     },
   );

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { throwAsMcpError } from '@lib/mcp-error.js';
 
 // ─── Fenkit Memory Protocol ────────────────────────────────────────────────────
 // These instructions are written to client rule files so the agent knows
@@ -455,11 +456,7 @@ export function registerSetupTools(server: McpServer): void {
 
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        return {
-          content: [{ type: 'text' as const, text: `Error setting up ${client}: ${msg}` }],
-          isError: true,
-        };
+        throwAsMcpError(error, { toolName: 'setup_client', extraData: { client } });
       }
     },
   );

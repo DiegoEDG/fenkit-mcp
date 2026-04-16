@@ -1,7 +1,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { requireProject, saveConfig } from '@lib/config.js';
-import { getApiClient, formatApiError } from '@lib/api.js';
+import { getApiClient } from '@lib/api.js';
+import { throwAsMcpError } from '@lib/mcp-error.js';
 import { resolveTaskByIdentifier, type TaskResponse } from './task-common.js';
 import { TaskIdentifierSchema } from '@lib/schemas.js';
 import { extractPromptFromHeaders, trackToolCall } from '@lib/observability.js';
@@ -227,8 +228,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					chatId: chat_id,
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'resolve_session_task' });
 			}
 		}
 	);
@@ -306,8 +306,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					sessionId: extra.sessionId,
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'list_tasks' });
 			}
 		}
 	);
@@ -373,8 +372,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					sessionId: extra.sessionId,
 					prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
 				});
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'search_tasks' });
 			}
 		}
 	);
@@ -421,8 +419,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					content: [{ type: 'text' as const, text: renderCompactContext(task, clampedMaxChars) }]
 				};
 			} catch (error) {
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'get_task_context_compact' });
 			}
 		}
 	);
@@ -461,8 +458,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					content: [{ type: 'text' as const, text: renderFullContext(task) }]
 				};
 			} catch (error) {
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'get_task_context_full' });
 			}
 		}
 	);
@@ -507,8 +503,7 @@ export function registerTaskReadTools(server: McpServer): void {
 					content: [{ type: 'text' as const, text: renderTaskSection(task, section, clampedMaxChars) }]
 				};
 			} catch (error) {
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'get_task_section' });
 			}
 		}
 	);
@@ -535,8 +530,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				const lines = data.map((t) => `- **${t.title}** (\`${t.id.substring(0, 5)}\`) · ${t.status} · ${t.priority}`);
 				return { content: [{ type: 'text' as const, text: `## Active Tasks\n\n${lines.join('\n')}` }] };
 			} catch (error) {
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'get_active_tasks' });
 			}
 		}
 	);
@@ -563,8 +557,7 @@ export function registerTaskReadTools(server: McpServer): void {
 				const lines = data.map((t) => `- **${t.title}** (\`${t.id.substring(0, 5)}\`) · ${t.priority}`);
 				return { content: [{ type: 'text' as const, text: `## Tasks in Review\n\n${lines.join('\n')}` }] };
 			} catch (error) {
-				const err = formatApiError(error);
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'get_tasks_in_review' });
 			}
 		}
 	);

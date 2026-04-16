@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { AxiosInstance } from 'axios';
 import { randomUUID } from 'node:crypto';
 import { requireProject } from '@lib/config.js';
-import { getApiClient, formatApiError } from '@lib/api.js';
+import { getApiClient } from '@lib/api.js';
+import { throwAsMcpError } from '@lib/mcp-error.js';
 import {
 	ArtifactModeSchema,
 	OperationIdSchema,
@@ -631,14 +632,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 						isError: true
 					};
 				}
-				const err = formatApiError(error);
 				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					const message = error instanceof Error ? error.message : String(error);
 					return {
-						content: [{ type: 'text' as const, text: `Error: ${err.message}\nresult_code: idempotency_conflict` }],
+						content: [{ type: 'text' as const, text: `Error: ${message}\nresult_code: idempotency_conflict` }],
 						isError: true
 					};
 				}
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'update_task_plan' });
 			}
 		}
 	);
@@ -849,14 +850,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 						isError: true
 					};
 				}
-				const err = formatApiError(error);
 				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					const message = error instanceof Error ? error.message : String(error);
 					return {
-						content: [{ type: 'text' as const, text: `Error: ${err.message}\nresult_code: idempotency_conflict` }],
+						content: [{ type: 'text' as const, text: `Error: ${message}\nresult_code: idempotency_conflict` }],
 						isError: true
 					};
 				}
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'update_task_walkthrough' });
 			}
 		}
 	);
@@ -1044,14 +1045,14 @@ export function registerTaskWriteTools(server: McpServer): void {
 					latencyMs: Date.now() - startedAt,
 					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
-				const err = formatApiError(error);
 				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					const message = error instanceof Error ? error.message : String(error);
 					return {
-						content: [{ type: 'text' as const, text: `Error: ${err.message}\nresult_code: idempotency_conflict` }],
+						content: [{ type: 'text' as const, text: `Error: ${message}\nresult_code: idempotency_conflict` }],
 						isError: true
 					};
 				}
-				return { content: [{ type: 'text' as const, text: `Error: ${err.message}` }], isError: true };
+				throwAsMcpError(error, { toolName: 'set_task_status' });
 			}
 		}
 	);
