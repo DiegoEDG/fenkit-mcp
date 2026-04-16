@@ -19,7 +19,8 @@ import { stableHash, trackToolCall, extractPromptFromHeaders } from '@lib/observ
 import { withOptional } from '@lib/utils.js';
 import { getGitMetadata, resolveAffectedRepos, type GitContext } from '@lib/git.js';
 import { consumeConfirmationToken, isSensitiveConfirmationEnabled, issueConfirmationToken } from '@lib/confirmation.js';
-import { bindingTracker } from '@lifecycle/index.js';
+import { bindingTracker, lifecycleGate, isEnforcementActive, isStrictMode, LifecycleStep } from '@lifecycle/index.js';
+import { createLogger } from '@lib/logger.js';
 
 function renderPlanMarkdown(plan: z.infer<typeof PlanSchema>): string {
 	const lines: string[] = [];
@@ -119,6 +120,8 @@ const WRITE_RETRY_ATTEMPTS = 3;
 const WRITE_RETRY_BACKOFF_MS = 250;
 const DEFAULT_AGENT = 'mcp-client';
 const DEFAULT_MODEL = 'unknown';
+
+const logger = createLogger('task-write');
 
 function delay(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -495,16 +498,58 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
 				const targetStatus = resolvePlanLifecycleStatus(currentTask.status);
-				const shouldMoveToInProgress = targetStatus !== currentTask.status;
-				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
-				const confirmationScope = `task:${projectId}:${currentTask.id}`;
-				const chatContext = resolveChatContext({
-					chatId: chat_id,
-					taskId: currentTask.id,
-					requestHeaders: extra.requestInfo?.headers
-				});
-				if (resolvedExecutionMode === 'preview') {
-					const confirmation = issueConfirmationToken({
+const shouldMoveToInProgress = targetStatus !== currentTask.status;
+			const resolvedExecutionMode = resolveExecutionMode(execution_mode);
+			const confirmationScope = `task:${projectId}:${currentTask.id}`;
+			const chatContext = resolveChatContext({
+				chatId: chat_id,
+				taskId: currentTask.id,
+				requestHeaders: extra.requestInfo?.headers
+			});
+
+			// Lifecycle gate: validate state for bound tasks BEFORE proceeding
+			// This enforces the strict lifecycle: bound → plan → in_progress → walkthrough → in_review
+			if (isEnforcementActive() && bindingTracker.isBound(currentTask.id)) {
+				const violation = lifecycleGate.checkViolation('update_task_plan', currentTask.id);
+
+				if (violation) {
+					const shouldBlock = isStrictMode();
+
+					// In STRICT mode: block the operation
+					if (shouldBlock) {
+						trackToolCall({
+							tool: 'update_task_plan',
+							input: { taskId, operation_id: resolvedOperationId },
+							error: violation.message,
+							latencyMs: Date.now() - startedAt,
+							...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+						});
+
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: [
+										`❌ LIFECYCLE VIOLATION — ${violation.code}`,
+										`reason: ${violation.reason}`,
+										`message: ${violation.message}`,
+										violation.required_tool ? `required: ${violation.required_tool}` : '',
+										violation.current_step ? `current_step: ${violation.current_step}` : '',
+										`result_code: lifecycle_blocked`
+									].filter(Boolean).join('\n')
+								}
+							],
+							isError: true
+						};
+					}
+
+					// In WARN mode: log and continue (but include warning in response)
+					logger.warn(`[Lifecycle Warn] ${violation.message}`);
+				}
+			}
+
+			if (resolvedExecutionMode === 'preview') {
+				const confirmation = issueConfirmationToken({
 						tool: 'update_task_plan',
 						payloadHash,
 						scope: confirmationScope,
@@ -717,13 +762,64 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const walkthroughContent = renderWalkthroughMarkdown(parsed);
 				const resolvedTokens = resolveTokens(walkthroughContent, tokens);
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
-				const confirmationScope = `task:${projectId}:${currentTask.id}`;
-				const chatContext = resolveChatContext({
-					chatId: chat_id,
-					taskId: currentTask.id,
-					requestHeaders: extra.requestInfo?.headers
-				});
-				if (resolvedExecutionMode === 'preview') {
+const confirmationScope = `task:${projectId}:${currentTask.id}`;
+			const chatContext = resolveChatContext({
+				chatId: chat_id,
+				taskId: currentTask.id,
+				requestHeaders: extra.requestInfo?.headers
+			});
+
+			// Lifecycle gate: validate state for bound tasks BEFORE proceeding
+			// This enforces the strict lifecycle: bound → plan → in_progress → walkthrough → in_review
+			if (isEnforcementActive() && bindingTracker.isBound(currentTask.id)) {
+				const state = bindingTracker.getState(currentTask.id);
+
+				// Walkthrough requires: plan written + in_progress status
+				if (!state?.planWrittenAt || !state?.inProgressAt) {
+					const violation = {
+						code: 'LIFECYCLE_VIOLATION',
+						reason: 'plan_missing' as const,
+						message: state?.planWrittenAt
+							? 'Cannot write walkthrough without in_progress status. Call set_task_status(in_progress) first.'
+							: 'Cannot write walkthrough without a persisted plan. Call update_task_plan first.',
+						required_tool: state?.planWrittenAt ? 'set_task_status' : 'update_task_plan',
+						current_step: state?.planWrittenAt ? LifecycleStep.IN_PROGRESS : LifecycleStep.PLAN
+					};
+
+					const shouldBlock = isStrictMode();
+
+					if (shouldBlock) {
+						trackToolCall({
+							tool: 'update_task_walkthrough',
+							input: { taskId, operation_id: resolvedOperationId },
+							error: violation.message,
+							latencyMs: Date.now() - startedAt,
+							...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+						});
+
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: [
+										`❌ LIFECYCLE VIOLATION — ${violation.code}`,
+										`reason: ${violation.reason}`,
+										`message: ${violation.message}`,
+										`required: ${violation.required_tool}`,
+										`current_step: ${violation.current_step}`,
+										`result_code: lifecycle_blocked`
+									].join('\n')
+								}
+							],
+							isError: true
+						};
+					}
+
+					logger.warn(`[Lifecycle Warn] ${violation.message}`);
+				}
+			}
+
+			if (resolvedExecutionMode === 'preview') {
 					const confirmation = issueConfirmationToken({
 						tool: 'update_task_walkthrough',
 						payloadHash,
@@ -925,9 +1021,96 @@ export function registerTaskWriteTools(server: McpServer): void {
 				const api = getApiClient();
 				const currentTask = await resolveTaskByIdentifier(api, projectId, taskId);
 				const resolvedExecutionMode = resolveExecutionMode(execution_mode);
-				const payloadHash = stableHash({ status });
-				const confirmationScope = `task:${projectId}:${currentTask.id}`;
-				if (resolvedExecutionMode === 'preview') {
+const payloadHash = stableHash({ status });
+			const confirmationScope = `task:${projectId}:${currentTask.id}`;
+
+			// Lifecycle gate: validate state for bound tasks BEFORE proceeding
+			// This enforces the strict lifecycle: bound → plan → in_progress → walkthrough → in_review
+			if (isEnforcementActive() && bindingTracker.isBound(currentTask.id)) {
+				const state = bindingTracker.getState(currentTask.id);
+
+				// Rule: in_progress requires plan
+				if (status === 'in_progress' && !state?.planWrittenAt) {
+					const violation = {
+						code: 'LIFECYCLE_VIOLATION',
+						reason: 'plan_missing' as const,
+						message: 'Cannot set status to in_progress without a persisted plan. Call update_task_plan first.',
+						required_tool: 'update_task_plan',
+						current_step: LifecycleStep.PLAN
+					};
+
+					if (isStrictMode()) {
+						trackToolCall({
+							tool: 'set_task_status',
+							input: { taskId, status, operation_id: resolvedOperationId },
+							error: violation.message,
+							latencyMs: Date.now() - startedAt,
+							...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+						});
+
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: [
+										`❌ LIFECYCLE VIOLATION — ${violation.code}`,
+										`reason: ${violation.reason}`,
+										`message: ${violation.message}`,
+										`required: ${violation.required_tool}`,
+										`current_step: ${violation.current_step}`,
+										`result_code: lifecycle_blocked`
+									].join('\n')
+								}
+							],
+							isError: true
+						};
+					}
+
+					logger.warn(`[Lifecycle Warn] ${violation.message}`);
+				}
+
+				// Rule: in_review requires walkthrough
+				if (status === 'in_review' && !state?.walkthroughWrittenAt) {
+					const violation = {
+						code: 'LIFECYCLE_VIOLATION',
+						reason: 'walkthrough_missing' as const,
+						message: 'Cannot set status to in_review without a persisted walkthrough. Call update_task_walkthrough first.',
+						required_tool: 'update_task_walkthrough',
+						current_step: LifecycleStep.WALKTHROUGH
+					};
+
+					if (isStrictMode()) {
+						trackToolCall({
+							tool: 'set_task_status',
+							input: { taskId, status, operation_id: resolvedOperationId },
+							error: violation.message,
+							latencyMs: Date.now() - startedAt,
+							...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+						});
+
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: [
+										`❌ LIFECYCLE VIOLATION — ${violation.code}`,
+										`reason: ${violation.reason}`,
+										`message: ${violation.message}`,
+										`required: ${violation.required_tool}`,
+										`current_step: ${violation.current_step}`,
+										`result_code: lifecycle_blocked`
+									].join('\n')
+								}
+							],
+							isError: true
+						};
+					}
+
+					logger.warn(`[Lifecycle Warn] ${violation.message}`);
+				}
+			}
+
+			if (resolvedExecutionMode === 'preview') {
 					const confirmation = issueConfirmationToken({
 						tool: 'set_task_status',
 						payloadHash,
