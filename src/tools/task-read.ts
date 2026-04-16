@@ -142,7 +142,7 @@ export function registerTaskReadTools(server: McpServer): void {
 						latencyMs: Date.now() - startedAt,
 						sessionId: extra.sessionId,
 						chatId: chat_id,
-						prompt: extractPromptFromHeaders(extra.requestInfo?.headers)
+						prompt: extractPromptFromHeaders(extra.requestInfo?.headers) ?? ''
 					});
 					return {
 						content: [
@@ -267,7 +267,7 @@ export function registerTaskReadTools(server: McpServer): void {
 
 				for (const t of data) {
 					if (!tasksByStatus[t.status]) tasksByStatus[t.status] = [];
-					tasksByStatus[t.status].push(t);
+					tasksByStatus[t.status]!.push(t);
 				}
 
 				const lines: string[] = [`## Tasks in ${config.currentProjectName || 'project'}`, ''];

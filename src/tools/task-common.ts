@@ -48,7 +48,7 @@ export async function resolveTaskByIdentifier(
 	const prefixMatches = data.filter((task) => task.id.toLowerCase().startsWith(normalized));
 
 	if (prefixMatches.length === 1) {
-		return prefixMatches[0];
+		return prefixMatches[0]!;
 	}
 
 	if (prefixMatches.length > 1) {
@@ -60,7 +60,7 @@ export async function resolveTaskByIdentifier(
 	}
 
 	if (data.length === 1) {
-		return data[0];
+		return data[0]!;
 	}
 
 	const candidates = data

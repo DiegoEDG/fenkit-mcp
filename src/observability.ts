@@ -86,8 +86,8 @@ export function trackToolCall(event: {
 	duplicateAvoided?: boolean;
 	retries?: number;
 	chatId?: string;
-	prompt?: string;
-	sessionId?: string;
+	prompt?: string | undefined;
+	sessionId?: string | undefined;
 }): void {
 	const stat = getMetric(event.tool);
 	stat.calls += 1;

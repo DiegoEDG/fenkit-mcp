@@ -620,7 +620,7 @@ export function registerSetupTools(server: McpServer): void {
       };
 
       return {
-        content: [{ type: 'text' as const, text: instructions[client] }],
+        content: [{ type: 'text' as const, text: instructions[client] ?? '' }],
       };
     },
   );

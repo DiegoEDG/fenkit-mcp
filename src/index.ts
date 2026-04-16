@@ -45,7 +45,7 @@ async function main(): Promise<void> {
 
 		try {
 			// In CLI mode, we assume argv[1] is the absolute path to the current script
-			const serverPath = process.argv[1];
+			const serverPath = process.argv[1] ?? '';
 			const result = setupHandlers[client](serverPath);
 			console.log(`✅ Fenkit MCP configured for ${client}`);
 			console.log(`Action: ${result.action}`);

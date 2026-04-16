@@ -8,7 +8,7 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 export interface FnkConfig {
   token: string;
   currentProjectId?: string;
-  currentProjectName?: string;
+  currentProjectName?: string | undefined;
 }
 
 const DEFAULT_CONFIG: FnkConfig = {
