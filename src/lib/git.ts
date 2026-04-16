@@ -120,12 +120,16 @@ function extractRepoName(repoPath: string): string {
 
 /**
  * Collect git metadata for a specific repository root.
+ * Runs all git commands in parallel for better performance.
  */
 async function collectGitMetadata(repoPath: string): Promise<GitMetadata> {
-	const branch = await runGit('rev-parse --abbrev-ref HEAD', repoPath);
-	const commitHash = await runGit('rev-parse --short HEAD', repoPath);
-	const remoteUrl = await runGit('config --get remote.origin.url', repoPath);
-	const statusOutput = await runGit('status --porcelain', repoPath);
+	// Run all git commands in parallel to avoid sequential blocking
+	const [branch, commitHash, remoteUrl, statusOutput] = await Promise.all([
+		runGit('rev-parse --abbrev-ref HEAD', repoPath),
+		runGit('rev-parse --short HEAD', repoPath),
+		runGit('config --get remote.origin.url', repoPath),
+		runGit('status --porcelain', repoPath)
+	]);
 
 	let status: GitMetadata['status'] = 'unknown';
 	if (statusOutput !== null) {
@@ -188,19 +192,27 @@ export async function getGitMetadataForPath(filePath: string): Promise<GitMetada
 /**
  * Get git metadata for multiple file paths.
  * Deduplicates by repoPath so each repo appears only once.
+ * Runs all repo collections in parallel for better performance.
  * Returns an array of unique GitMetadata objects.
  */
 export async function getGitMetadataForPaths(filePaths: string[]): Promise<GitMetadata[]> {
 	const repoMap = new Map<string, GitMetadata>();
 
+	// Collect all git roots first (synchronous, fast)
+	const gitRoots = new Set<string>();
 	for (const filePath of filePaths) {
 		const gitRoot = findGitRootForPath(filePath);
-		if (!gitRoot) continue;
+		if (gitRoot) gitRoots.add(gitRoot);
+	}
 
-		// Skip if we already have this repo
-		if (repoMap.has(gitRoot)) continue;
+	// Run all repo collections in parallel
+	const metadataList = await Promise.all(
+		Array.from(gitRoots).map((gitRoot) => collectGitMetadata(gitRoot))
+	);
 
-		repoMap.set(gitRoot, await collectGitMetadata(gitRoot));
+	// Build the map (deduplication is automatic since we used a Set)
+	for (const metadata of metadataList) {
+		repoMap.set(metadata.repoPath, metadata);
 	}
 
 	return Array.from(repoMap.values());
