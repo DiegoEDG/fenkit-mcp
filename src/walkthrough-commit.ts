@@ -39,9 +39,9 @@ function inferCommitScope(filesModified: string[]): string | undefined {
 		if (!parts.length) continue;
 
 		const top = parts[0];
-		const candidate = (top === 'src' || top === 'apps' || top === 'packages' || top === 'lib') && parts[1]
-			? parts[1]
-			: top;
+		const isMonoRepo = top === 'src' || top === 'apps' || top === 'packages' || top === 'lib';
+		const candidate = isMonoRepo && parts[1] ? parts[1] : top;
+		if (!candidate) continue;
 		const sanitized = candidate.replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
 		if (sanitized) scopes.add(sanitized);
 	}

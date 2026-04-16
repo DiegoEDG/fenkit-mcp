@@ -261,6 +261,16 @@ export function registerAuthTools(
 
 		if (projects.length === 1) {
 			const project = projects[0];
+			if (!project) {
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: '⚠️ Received an empty project list. Token saved but no project was auto-selected.'
+						}
+					]
+				};
+			}
 			configUpdate.currentProjectId = project.id;
 			configUpdate.currentProjectName = project.name;
 			autoSelectedProjectName = project.name;
