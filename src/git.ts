@@ -1,6 +1,9 @@
-import { execSync } from 'node:child_process';
+import { exec } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
+
+const execAsync = promisify(exec);
 
 export interface GitMetadata {
 	branch: string | null;
@@ -11,14 +14,14 @@ export interface GitMetadata {
 	repoPath: string;
 }
 
-function runGit(args: string, cwd: string): string | null {
+async function runGit(args: string, cwd: string): Promise<string | null> {
 	try {
-		return execSync(`git ${args}`, {
+		const { stdout } = await execAsync(`git ${args}`, {
 			encoding: 'utf-8',
 			timeout: 3000,
-			stdio: ['ignore', 'pipe', 'ignore'],
 			cwd
-		}).trim();
+		});
+		return stdout.trim();
 	} catch {
 		return null;
 	}
@@ -87,11 +90,11 @@ function extractRepoName(repoPath: string): string {
 /**
  * Collect git metadata for a specific repository root.
  */
-function collectGitMetadata(repoPath: string): GitMetadata {
-	const branch = runGit('rev-parse --abbrev-ref HEAD', repoPath);
-	const commitHash = runGit('rev-parse --short HEAD', repoPath);
-	const remoteUrl = runGit('config --get remote.origin.url', repoPath);
-	const statusOutput = runGit('status --porcelain', repoPath);
+async function collectGitMetadata(repoPath: string): Promise<GitMetadata> {
+	const branch = await runGit('rev-parse --abbrev-ref HEAD', repoPath);
+	const commitHash = await runGit('rev-parse --short HEAD', repoPath);
+	const remoteUrl = await runGit('config --get remote.origin.url', repoPath);
+	const statusOutput = await runGit('status --porcelain', repoPath);
 
 	let status: GitMetadata['status'] = 'unknown';
 	if (statusOutput !== null) {
@@ -116,7 +119,7 @@ function collectGitMetadata(repoPath: string): GitMetadata {
  *
  * @deprecated Use getGitMetadataForPaths for multi-repo support.
  */
-export function getGitMetadata(): GitMetadata {
+export async function getGitMetadata(): Promise<GitMetadata> {
 	const gitRoot = findNearestGitRoot();
 
 	if (!gitRoot) {
@@ -145,7 +148,7 @@ export function findGitRoot(filePath: string): string | null {
  * Get git metadata for a single file path.
  * Walks up from the file's directory to find the nearest .git.
  */
-export function getGitMetadataForPath(filePath: string): GitMetadata | null {
+export async function getGitMetadataForPath(filePath: string): Promise<GitMetadata | null> {
 	const gitRoot = findGitRootForPath(filePath);
 	if (!gitRoot) return null;
 	return collectGitMetadata(gitRoot);
@@ -156,7 +159,7 @@ export function getGitMetadataForPath(filePath: string): GitMetadata | null {
  * Deduplicates by repoPath so each repo appears only once.
  * Returns an array of unique GitMetadata objects.
  */
-export function getGitMetadataForPaths(filePaths: string[]): GitMetadata[] {
+export async function getGitMetadataForPaths(filePaths: string[]): Promise<GitMetadata[]> {
 	const repoMap = new Map<string, GitMetadata>();
 
 	for (const filePath of filePaths) {
@@ -166,7 +169,7 @@ export function getGitMetadataForPaths(filePaths: string[]): GitMetadata[] {
 		// Skip if we already have this repo
 		if (repoMap.has(gitRoot)) continue;
 
-		repoMap.set(gitRoot, collectGitMetadata(gitRoot));
+		repoMap.set(gitRoot, await collectGitMetadata(gitRoot));
 	}
 
 	return Array.from(repoMap.values());
@@ -179,6 +182,6 @@ export function getGitMetadataForPaths(filePaths: string[]): GitMetadata[] {
  * @param changedFiles - Array of file paths that were modified
  * @returns Array of GitMetadata, one per affected repo
  */
-export function resolveAffectedRepos(changedFiles: string[]): GitMetadata[] {
+export async function resolveAffectedRepos(changedFiles: string[]): Promise<GitMetadata[]> {
 	return getGitMetadataForPaths(changedFiles);
 }

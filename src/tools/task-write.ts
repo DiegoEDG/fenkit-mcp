@@ -356,6 +356,37 @@ function buildMcpPayload(options: {
 	// Build the primary git fields from the first context (for backward compatibility)
 	const primaryContext = contexts[0];
 	
+	// Build primary repo fields only if context exists
+	const primaryFields = primaryContext
+		? {
+				git_branch: primaryContext.branch,
+				git_commit_hash: primaryContext.commitHash,
+				git_remote_url: primaryContext.remoteUrl,
+				git_status: primaryContext.status
+			}
+		: {};
+
+	// Build multi-repo contexts only if contexts exist
+	const multiRepoContexts = contexts.length > 0
+		? contexts.map((ctx) => ({
+				branch: ctx.branch,
+				commit_hash: ctx.commitHash,
+				remote_url: ctx.remoteUrl,
+				status: ctx.status,
+				repo_name: ctx.repoName,
+				repo_path: ctx.repoPath
+			}))
+		: undefined;
+
+	// Build confirmation fields only if confirmation exists
+	const confirmationFields = options.confirmation
+		? {
+				confirmation_id: options.confirmation.tokenId,
+				confirmation_confirmed_at: options.confirmation.confirmedAt,
+				confirmation_requested_at: options.confirmation.requestedAt
+			}
+		: {};
+
 	return {
 		mcpContext: {
 			actor: options.agent,
@@ -364,21 +395,9 @@ function buildMcpPayload(options: {
 			session_id: options.chatContext.sessionId,
 			last_seen_at: new Date().toISOString(),
 			last_model: options.model,
-			// Primary repo fields (backward compatibility)
-			git_branch: primaryContext?.branch ?? undefined,
-			git_commit_hash: primaryContext?.commitHash ?? undefined,
-			git_remote_url: primaryContext?.remoteUrl ?? undefined,
-			git_status: primaryContext?.status ?? undefined,
-			// Multi-repo support
-			git_contexts: contexts.length > 0 ? contexts.map(ctx => ({
-				branch: ctx.branch,
-				commit_hash: ctx.commitHash,
-				remote_url: ctx.remoteUrl,
-				status: ctx.status,
-				repo_name: ctx.repoName,
-				repo_path: ctx.repoPath
-			})) : undefined,
-			affected_files: options.affectedFiles
+			...primaryFields,
+			...(multiRepoContexts ? { git_contexts: multiRepoContexts } : {}),
+			...(options.affectedFiles ? { affected_files: options.affectedFiles } : {})
 		},
 		mcpEvent: {
 			tool: options.toolName,
@@ -390,9 +409,7 @@ function buildMcpPayload(options: {
 			tokens: options.tokens,
 			latency_ms: options.latencyMs ?? 0,
 			changed_fields: options.changedFields,
-			confirmation_id: options.confirmation?.tokenId,
-			confirmation_confirmed_at: options.confirmation?.confirmedAt,
-			confirmation_requested_at: options.confirmation?.requestedAt
+			...confirmationFields
 		}
 	};
 }
@@ -529,11 +546,11 @@ export function registerTaskWriteTools(server: McpServer): void {
 					});
 				}
 
-				const gitContext = getGitMetadata();
+				const gitContext = await getGitMetadata();
 				// Multi-repo detection: use files_affected from plan if available
 				const affectedFiles = parsed.files_affected ?? [];
 				const gitContexts = affectedFiles.length > 0
-					? resolveAffectedRepos(affectedFiles)
+					? await resolveAffectedRepos(affectedFiles)
 					: [gitContext];
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_plan',
@@ -749,11 +766,11 @@ export function registerTaskWriteTools(server: McpServer): void {
 					});
 				}
 
-				const gitContext = getGitMetadata();
+				const gitContext = await getGitMetadata();
 				// Multi-repo detection: use files_modified from walkthrough
 				const affectedFiles = parsed.files_modified ?? [];
 				const gitContexts = affectedFiles.length > 0
-					? resolveAffectedRepos(affectedFiles)
+					? await resolveAffectedRepos(affectedFiles)
 					: [gitContext];
 				const mcpPayload = buildMcpPayload({
 					toolName: 'update_task_walkthrough',
@@ -955,7 +972,7 @@ export function registerTaskWriteTools(server: McpServer): void {
 					requestHeaders: extra.requestInfo?.headers
 				});
 				const resolvedTokens = resolveTokens(JSON.stringify({ status }), tokens);
-				const gitContext = getGitMetadata();
+				const gitContext = await getGitMetadata();
 				const mcpPayload = buildMcpPayload({
 					toolName: 'set_task_status',
 					operationId: resolvedOperationId,
