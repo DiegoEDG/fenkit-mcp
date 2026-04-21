@@ -88,14 +88,15 @@ Nuestras herramientas están diseñadas para que el agente tenga autonomía tota
 
 - 🔐 **Auth/Admin:** `login`, `get_status`, `setup_client` - Seguridad y configuración.
 - 📂 **Proyectos:** `list_projects`, `select_project` - Navegación inteligente.
-- 📝 **Tareas:** `list_tasks`, `get_task_context_compact` - Foco en lo que importa.
-- 🚀 **Escritura:** `update_task_plan`, `update_task_walkthrough`, `set_task_status` - Documentación y lifecycle determinista.
+- 📝 **Tareas (lectura):** `list_tasks`, `get_task_context_compact` - Foco en lo que importa.
+- 🚀 **Tareas (escritura):** `update_task_plan`, `update_task_walkthrough`, `set_task_status` - Documentación y lifecycle determinista.
+- ➕ **Creación:** `fenkit_write_create_task`, `fenkit_write_create_tasks_bulk` - Creación de tareas con idempotencia.
 
 ---
 
 ## 🔥 Empieza Ahora
 
-No dejes que tu agente trabaje en el vacío. Haz que cada línea de código cuente.
+No dejes que tu agente trabaje en el vacío. Haz que cada línea de código cuenta.
 
 ```bash
 npx -y fenkit-mcp setup cursor

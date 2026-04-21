@@ -81,3 +81,57 @@ export const SessionSummarySchema = z.object({
   next_recommendations: z.array(ShortTextSchema).max(20).optional().describe('Recommended next actions'),
 }).strict();
 export type SessionSummary = z.infer<typeof SessionSummarySchema>;
+
+// ─── MTB-01: Create Task Input Schema ───────────────────────────────────────
+// MCP create_task input: task fields + metadata envelope
+export const CreateTaskInputSchema = z.object({
+  title: ShortTextSchema.describe('Task title (required)'),
+  description: MediumTextSchema.max(12000).optional().describe('Task description'),
+  status: TaskStatusSchema.optional().describe('Initial status (default: todo). MCP/agentic flows cannot set this to "done"'),
+  priority: TaskPrioritySchema.optional().describe('Initial priority (default: medium)'),
+  assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID (UUID)'),
+  plan: MediumTextSchema.max(24000).optional().describe('Initial plan content (markdown)'),
+  walkthrough: MediumTextSchema.max(24000).optional().describe('Initial walkthrough content (markdown)'),
+  tags: z.array(ShortTextSchema).max(20).optional().describe('Tag names to associate'),
+  blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().describe('Task IDs that block this task'),
+}).strict();
+
+export const CreateTaskMetadataSchema = z.object({
+  agent: z.string().trim().min(1).max(80).describe('Agent/client name (e.g. "claude-code", "cursor")'),
+  model: z.string().trim().min(1).max(120).describe('Model name (e.g. "claude-sonnet-4-20250514")'),
+  operation_id: OperationIdSchema.optional().describe('Optional idempotency key. Auto-generated when omitted'),
+  tokens: TokensSchema.optional().describe('Optional cumulative token usage'),
+  execution_mode: z.enum(['preview', 'execute']).optional().describe('Confirmation mode'),
+  confirmation_token: z.string().trim().min(8).max(200).optional().describe('Token returned by preview mode'),
+  chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier'),
+  projectId: TaskIdentifierSchema.optional().describe('Project ID (optional if active project)'),
+}).strict();
+
+// ─── MTB-02: Create Tasks Bulk Input Schema ─────────────────────────────────────────
+// MCP create_tasks_bulk input: items array + batch metadata
+export const CreateTaskBulkItemSchema = z.object({
+  title: ShortTextSchema.describe('Task title'),
+  description: MediumTextSchema.max(12000).optional().describe('Task description'),
+  status: TaskStatusSchema.optional().describe('Initial status'),
+  priority: TaskPrioritySchema.optional().describe('Initial priority'),
+  assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID'),
+  plan: MediumTextSchema.max(24000).optional().describe('Initial plan'),
+  walkthrough: MediumTextSchema.max(24000).optional().describe('Initial walkthrough'),
+  tags: z.array(ShortTextSchema).max(20).optional().describe('Tag names'),
+  blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().describe('Blocker task IDs'),
+}).strict();
+
+export const CreateTasksBulkMetadataSchema = z.object({
+  agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
+  model: z.string().trim().min(1).max(120).describe('Model name'),
+  operation_id_prefix: z.string().trim().min(8).max(128).optional().describe('Batch operation_id prefix for idempotent replay'),
+  tokens: TokensSchema.optional().describe('Optional cumulative token usage'),
+  execution_mode: z.enum(['preview', 'execute']).optional().describe('Confirmation mode'),
+  confirmation_token: z.string().trim().min(8).max(200).optional().describe('Token returned by preview mode'),
+  chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier'),
+  projectId: TaskIdentifierSchema.optional().describe('Project ID (optional if active project)'),
+}).strict();
+
+export const CreateTasksBulkInputSchema = z.object({
+  items: z.array(CreateTaskBulkItemSchema).min(1).max(50).describe('Task items to create (max 50)'),
+}).strict();

@@ -12,7 +12,11 @@ import {
 	TaskIdentifierSchema,
 	TaskStatusSchema,
 	TokensSchema,
-	WalkthroughSchema
+	WalkthroughSchema,
+	CreateTaskInputSchema,
+	CreateTaskMetadataSchema,
+	CreateTasksBulkInputSchema,
+	CreateTasksBulkMetadataSchema
 } from '@lib/schemas.js';
 import { resolveTaskByIdentifier } from './task-common.js';
 import { stableHash, trackToolCall, extractPromptFromHeaders } from '@lib/observability.js';
@@ -1327,6 +1331,474 @@ const payloadHash = stableHash({ status });
 					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 				throwAsMcpError(error, { toolName: 'sync_active_project_from_binding' });
+			}
+		}
+	);
+
+	// ─── MTB-03: fenkit_write_create_task ──────────────────────────────────────────────
+	/**
+	 * Create a single task via MCP pipeline.
+	 * Reuses backend createTaskViaMcpPipeline with full idempotency semantics.
+	 */
+	server.tool(
+		'fenkit_write_create_task',
+		'Create a new task in the active project via MCP pipeline with idempotency.',
+		{
+			task: CreateTaskInputSchema.describe('Task fields for creation'),
+			metadata: CreateTaskMetadataSchema.describe('MCP metadata envelope'),
+		},
+		{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+		async ({ task, metadata }, extra) => {
+			const startedAt = Date.now();
+			try {
+				const parsedTask = CreateTaskInputSchema.parse(task);
+				const parsedMetadata = CreateTaskMetadataSchema.parse(metadata);
+
+				// Resolve project
+				const config = await requireProjectAsync();
+				const projectId = parsedMetadata.projectId ?? config.currentProjectId;
+				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
+
+				const api = await getApiClientAsync();
+
+				// Resolve operation_id
+				const resolvedOperationId = resolveOperationId({
+					operationId: parsedMetadata.operation_id,
+					toolName: 'fenkit_write_create_task'
+				});
+				const resolvedAgent = resolveAgentName({
+					agent: parsedMetadata.agent,
+					requestHeaders: extra.requestInfo?.headers
+				});
+				const resolvedModel = resolveModelName({
+					model: parsedMetadata.model,
+					requestHeaders: extra.requestInfo?.headers
+				});
+
+				// Resolve execution mode
+				const resolvedExecutionMode = resolveExecutionMode(parsedMetadata.execution_mode);
+				const payloadHash = stableHash({ task: parsedTask, operationId: resolvedOperationId });
+				const confirmationScope = `task:${projectId}:create`;
+
+				// Prepare MCP payload
+				const chatContext = resolveChatContext({
+					chatId: parsedMetadata.chat_id,
+					taskId: 'new',
+					requestHeaders: extra.requestInfo?.headers
+				});
+				const taskContent = JSON.stringify(parsedTask);
+				const resolvedTokens = resolveTokens(taskContent, parsedMetadata.tokens);
+
+				// MTW-06: MCP/agentic flows CANNOT create tasks with status 'done'
+				if (parsedTask.status === 'done') {
+					trackToolCall({
+						tool: 'fenkit_write_create_task',
+						input: { operation_id: resolvedOperationId, status: parsedTask.status },
+						error: 'agentic_flow_cannot_create_done_task',
+						latencyMs: Date.now() - startedAt,
+						...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									`❌ POLICY VIOLATION — MCP_Cannot_Create_Done`,
+									`reason: agentic_flow_cannot_create_done_task`,
+									`message: MCP/agentic flows cannot create tasks with status done. Only human users from UI can close tasks.`,
+									`result_code: policy_violation`
+								].join('\n')
+							}
+						],
+						isError: true
+					};
+				}
+
+				// Preview mode
+				if (resolvedExecutionMode === 'preview') {
+					const confirmation = issueConfirmationToken({
+						tool: 'fenkit_write_create_task',
+						payloadHash,
+						scope: confirmationScope,
+						actor: resolvedAgent
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									`## fenkit_write_create_task · preview`,
+									`- project_id: ${projectId}`,
+									`- operation_id: ${resolvedOperationId}`,
+									`- title: ${parsedTask.title}`,
+									`- status: ${parsedTask.status ?? 'todo'}`,
+									`- priority: ${parsedTask.priority ?? 'medium'}`,
+									`- payload_hash: ${payloadHash}`,
+									`- confirmation_token: ${confirmation.token}`,
+									`- confirmation_expires_at: ${confirmation.expiresAt}`,
+									`- result_code: preview_ready`
+								].join('\n')
+							}
+						]
+					};
+				}
+
+				// Confirmation handling
+				let confirmationMeta: ConfirmationMeta | undefined;
+				if (isSensitiveConfirmationEnabled()) {
+					if (!parsedMetadata.confirmation_token) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: 'CONFIRMATION_REQUIRED: call mode="preview" first, then execute with confirmation_token.'
+								}
+							],
+							isError: true
+						};
+					}
+					confirmationMeta = consumeConfirmationToken({
+						token: parsedMetadata.confirmation_token,
+						tool: 'fenkit_write_create_task',
+						payloadHash,
+						scope: confirmationScope,
+						actor: resolvedAgent
+					});
+				}
+
+				const gitContext = await getGitMetadata();
+				const mcpPayload = buildMcpPayload({
+					toolName: 'fenkit_write_create_task',
+					operationId: resolvedOperationId,
+					payloadHash,
+					agent: resolvedAgent,
+					model: resolvedModel,
+					chatContext,
+					tokenSource: resolvedTokens.tokenSource,
+					tokens: resolvedTokens.tokens,
+					latencyMs: Date.now() - startedAt,
+					changedFields: ['id', 'title', 'status', 'priority', 'description'],
+					requestHeaders: extra.requestInfo?.headers,
+					...withOptional('confirmation', confirmationMeta),
+					gitContext
+				});
+
+				// Build backend DTO
+				const createDto = {
+					task: {
+						title: parsedTask.title,
+						description: parsedTask.description,
+						status: parsedTask.status ?? 'todo',
+						priority: parsedTask.priority ?? 'medium',
+						assigneeId: parsedTask.assigneeId,
+						plan: parsedTask.plan,
+						walkthrough: parsedTask.walkthrough,
+						blockedByTaskIds: parsedTask.blockedByTaskIds
+					},
+					mcpContext: mcpPayload.mcpContext,
+					mcpEvent: mcpPayload.mcpEvent
+				};
+
+				// Call backend
+				const response = await api.post(`/projects/${projectId}/tasks/mcp`, createDto);
+				const createdTask = response.data;
+
+				trackToolCall({
+					tool: 'fenkit_write_create_task',
+					input: { operation_id: resolvedOperationId, title: parsedTask.title },
+					output: { task_id: createdTask.id, status: createdTask.status },
+					latencyMs: Date.now() - startedAt,
+					chatId: chatContext.chatId,
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+				});
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: [
+								`✔ Task created \`${createdTask.id.substring(0, 5)}\``,
+								``,
+								`**Title**: ${createdTask.title}`,
+								`**Status**: ${createdTask.status}`,
+								`**Priority**: ${createdTask.priority}`,
+								`**Operation ID**: ${resolvedOperationId}`,
+								`**result_code**: created`
+							].join('\n')
+						}
+					]
+				};
+			} catch (error) {
+				trackToolCall({
+					tool: 'fenkit_write_create_task',
+					input: { operation_id: metadata?.operation_id },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+				});
+				if (error instanceof z.ZodError) {
+					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
+					return {
+						content: [{ type: 'text' as const, text: `INVALID_INPUT: Task validation failed:\n${issues}` }],
+						isError: true
+					};
+				}
+				if (resolveIdempotencyErrorCode(error) === 'idempotency_conflict') {
+					const message = error instanceof Error ? error.message : String(error);
+					return {
+						content: [{ type: 'text' as const, text: `Error: ${message}\nresult_code: idempotency_conflict` }],
+						isError: true
+					};
+				}
+				// Handle specific backend error codes
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				if (errorMessage.includes('agentic_flow_cannot_create_done_task')) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: `Error: ${errorMessage}\nresult_code: policy_violation`
+							}
+						],
+						isError: true
+					};
+				}
+				throwAsMcpError(error, { toolName: 'fenkit_write_create_task' });
+			}
+		}
+	);
+
+	// ─── MTB-04: fenkit_write_create_tasks_bulk ────────────────────────────────────────────
+	/**
+	 * Create multiple tasks in one call with per-item result reporting.
+	 * Supports partial failure - each item is processed independently.
+	 */
+	server.tool(
+		'fenkit_write_create_tasks_bulk',
+		'Create multiple tasks in bulk via MCP pipeline with per-item result reporting.',
+		{
+			items: CreateTasksBulkInputSchema.describe('Task items to create'),
+			metadata: CreateTasksBulkMetadataSchema.describe('Batch metadata envelope'),
+		},
+		{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+		async ({ items, metadata }, extra) => {
+			const startedAt = Date.now();
+			try {
+				const parsedItems = CreateTasksBulkInputSchema.parse(items);
+				const parsedMetadata = CreateTasksBulkMetadataSchema.parse(metadata);
+
+				// Resolve project
+				const config = await requireProjectAsync();
+				const projectId = parsedMetadata.projectId ?? config.currentProjectId;
+				if (!projectId) throw new Error('NO_ACTIVE_PROJECT: No project selected.');
+
+				const api = await getApiClientAsync();
+
+				// Resolve common fields
+				const resolvedOperationIdPrefix = resolveOperationId({
+					operationId: parsedMetadata.operation_id_prefix,
+					toolName: 'fenkit_write_create_tasks_bulk'
+				});
+				const resolvedAgent = resolveAgentName({
+					agent: parsedMetadata.agent,
+					requestHeaders: extra.requestInfo?.headers
+				});
+				const resolvedModel = resolveModelName({
+					model: parsedMetadata.model,
+					requestHeaders: extra.requestInfo?.headers
+				});
+
+				// Resolve execution mode
+				const resolvedExecutionMode = resolveExecutionMode(parsedMetadata.execution_mode);
+				const confirmationScope = `task:${projectId}:bulk-create`;
+
+				// Preview mode
+				if (resolvedExecutionMode === 'preview') {
+					const confirmation = issueConfirmationToken({
+						tool: 'fenkit_write_create_tasks_bulk',
+						payloadHash: stableHash({ items: parsedItems, operationIdPrefix: resolvedOperationIdPrefix }),
+						scope: confirmationScope,
+						actor: resolvedAgent
+					});
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									`## fenkit_write_create_tasks_bulk · preview`,
+									`- project_id: ${projectId}`,
+									`- operation_id_prefix: ${resolvedOperationIdPrefix}`,
+									`- items_count: ${parsedItems.items.length}`,
+									`- max_items: 50`,
+									`- confirmation_token: ${confirmation.token}`,
+									`- confirmation_expires_at: ${confirmation.expiresAt}`,
+									`- result_code: preview_ready`
+								].join('\n')
+							}
+						]
+					};
+				}
+
+				// Confirmation handling
+				let confirmationMeta: ConfirmationMeta | undefined;
+				if (isSensitiveConfirmationEnabled()) {
+					if (!parsedMetadata.confirmation_token) {
+						return {
+							content: [
+								{
+									type: 'text' as const,
+									text: 'CONFIRMATION_REQUIRED: call mode="preview" first, then execute with confirmation_token.'
+								}
+							],
+							isError: true
+						};
+					}
+					confirmationMeta = consumeConfirmationToken({
+						token: parsedMetadata.confirmation_token,
+						tool: 'fenkit_write_create_tasks_bulk',
+						payloadHash: stableHash({ items: parsedItems, operationIdPrefix: resolvedOperationIdPrefix }),
+						scope: confirmationScope,
+						actor: resolvedAgent
+					});
+				}
+
+				// Build bulk request DTO
+				const bulkDto = {
+					tasks: parsedItems.items.map((item, index) => {
+						const itemOperationId = resolvedOperationIdPrefix
+							? `${resolvedOperationIdPrefix}-${index}`
+							: `auto:create:${Date.now()}:${randomUUID().slice(0, 8)}`;
+
+						// Compute item-level payload hash
+						const itemPayloadHash = stableHash({ task: item, operationId: itemOperationId });
+
+						// Build MCP context for this item
+						const chatContext = resolveChatContext({
+							chatId: parsedMetadata.chat_id,
+							taskId: 'new',
+							requestHeaders: extra.requestInfo?.headers
+						});
+						const mcpPayload = buildMcpPayload({
+							toolName: 'fenkit_write_create_tasks_bulk',
+							operationId: itemOperationId,
+							payloadHash: itemPayloadHash,
+							agent: resolvedAgent,
+							model: resolvedModel,
+							chatContext,
+							tokenSource: 'estimate',
+							tokens: {},
+							latencyMs: 0,
+							changedFields: ['id', 'title', 'status', 'priority'],
+							requestHeaders: extra.requestInfo?.headers,
+							...withOptional('confirmation', confirmationMeta)
+						});
+
+						return {
+							task: {
+								title: item.title,
+								description: item.description,
+								status: item.status ?? 'todo',
+								priority: item.priority ?? 'medium',
+								assigneeId: item.assigneeId,
+								plan: item.plan,
+								walkthrough: item.walkthrough,
+								blockedByTaskIds: item.blockedByTaskIds
+							},
+							mcpContext: mcpPayload.mcpContext,
+							mcpEvent: mcpPayload.mcpEvent
+						};
+					}),
+					operation_id_prefix: resolvedOperationIdPrefix
+				};
+
+				// Call backend bulk endpoint
+				const response = await api.post(`/projects/${projectId}/tasks/bulk`, bulkDto);
+				const bulkResponse = response.data;
+
+				// Map backend response to MCP-friendly format
+				const results = bulkResponse.results ?? [];
+				const summaryLines = [
+					`✔ Bulk create completed`,
+					``,
+					`**Total items**: ${results.length}`,
+					`**Created**: ${bulkResponse.created ?? 0}`,
+					`**Replayed**: ${bulkResponse.replayed ?? 0}`,
+					`**Conflicts**: ${bulkResponse.conflicts ?? 0}`,
+					`**Errors**: ${bulkResponse.errors ?? 0}`,
+					``
+				];
+
+				// Add per-item details
+				const detailLines: string[] = [];
+				for (const result of results) {
+					const status = result.status ?? 'error';
+					const taskId = result.task_id ?? result.replayed_task_id ?? 'N/A';
+					let line = `- [${status.toUpperCase()}]`;
+					if (status === 'created' || status === 'replayed') {
+						line += ` ${taskId.substring(0, 5)}`;
+					} else {
+						line += ` ${result.error_code ?? 'unknown'}`;
+						if (result.error_reason) line += `: ${result.error_reason.substring(0, 40)}`;
+					}
+					detailLines.push(line);
+				}
+				if (detailLines.length > 0) {
+					summaryLines.push('**Items**:');
+					summaryLines.push(...detailLines.slice(0, 10));
+					if (detailLines.length > 10) {
+						summaryLines.push(`  ... and ${detailLines.length - 10} more`);
+					}
+				}
+
+				// Determine overall result_code
+				const hasErrors = (bulkResponse.errors ?? 0) > 0;
+				const hasConflicts = (bulkResponse.conflicts ?? 0) > 0;
+				let resultCode = 'created';
+				if (hasErrors && (bulkResponse.created ?? 0) === 0) {
+					resultCode = 'failed';
+				} else if (hasErrors || hasConflicts) {
+					resultCode = 'partial';
+				}
+				summaryLines.push(``);
+				summaryLines.push(`**result_code**: ${resultCode}`);
+
+				trackToolCall({
+					tool: 'fenkit_write_create_tasks_bulk',
+					input: { operation_id_prefix: resolvedOperationIdPrefix, items_count: parsedItems.items.length },
+					output: {
+						created: bulkResponse.created ?? 0,
+						replayed: bulkResponse.replayed ?? 0,
+						conflicts: bulkResponse.conflicts ?? 0,
+						errors: bulkResponse.errors ?? 0
+					},
+					latencyMs: Date.now() - startedAt,
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+				});
+
+				return {
+					content: [
+						{
+							type: 'text' as const,
+							text: summaryLines.join('\n')
+						}
+					]
+				};
+			} catch (error) {
+				trackToolCall({
+					tool: 'fenkit_write_create_tasks_bulk',
+					input: { operation_id_prefix: metadata?.operation_id_prefix, items_count: items?.items?.length },
+					error: error instanceof Error ? error.message : String(error),
+					latencyMs: Date.now() - startedAt,
+					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
+				});
+				if (error instanceof z.ZodError) {
+					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
+					return {
+						content: [{ type: 'text' as const, text: `INVALID_INPUT: Bulk validation failed:\n${issues}` }],
+						isError: true
+					};
+				}
+				throwAsMcpError(error, { toolName: 'fenkit_write_create_tasks_bulk' });
 			}
 		}
 	);
