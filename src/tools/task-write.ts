@@ -18,7 +18,7 @@ import {
 	CreateTasksBulkInputSchema,
 	CreateTasksBulkMetadataSchema
 } from '@lib/schemas.js';
-import { resolveTaskByIdentifier } from './task-common.js';
+import { resolveTaskByIdentifier, resolveTaskIdentifiers } from './task-common.js';
 import { stableHash, trackToolCall, extractPromptFromHeaders } from '@lib/observability.js';
 import { withOptional } from '@lib/utils.js';
 import { getGitMetadata, resolveAffectedRepos, type GitContext } from '@lib/git.js';
@@ -1484,6 +1484,10 @@ const payloadHash = stableHash({ status });
 				});
 
 				// Build backend DTO
+				const resolvedBlockedByTaskIds = parsedTask.blockedByTaskIds?.length
+					? await resolveTaskIdentifiers(api, projectId, parsedTask.blockedByTaskIds)
+					: undefined;
+
 				const createDto = {
 					task: {
 						title: parsedTask.title,
@@ -1493,7 +1497,7 @@ const payloadHash = stableHash({ status });
 						assigneeId: parsedTask.assigneeId,
 						plan: parsedTask.plan,
 						walkthrough: parsedTask.walkthrough,
-						blockedByTaskIds: parsedTask.blockedByTaskIds
+						blockedByTaskIds: resolvedBlockedByTaskIds
 					},
 					mcpContext: mcpPayload.mcpContext,
 					mcpEvent: mcpPayload.mcpEvent
@@ -1663,8 +1667,8 @@ const payloadHash = stableHash({ status });
 				}
 
 				// Build bulk request DTO
-				const bulkDto = {
-					tasks: parsedItems.items.map((item, index) => {
+				const bulkTasks = await Promise.all(
+					parsedItems.items.map(async (item, index) => {
 						const itemOperationId = resolvedOperationIdPrefix
 							? `${resolvedOperationIdPrefix}-${index}`
 							: `auto:create:${Date.now()}:${randomUUID().slice(0, 8)}`;
@@ -1693,6 +1697,10 @@ const payloadHash = stableHash({ status });
 							...withOptional('confirmation', confirmationMeta)
 						});
 
+						const resolvedBlockedByTaskIds = item.blockedByTaskIds?.length
+							? await resolveTaskIdentifiers(api, projectId, item.blockedByTaskIds)
+							: undefined;
+
 						return {
 							task: {
 								title: item.title,
@@ -1702,12 +1710,16 @@ const payloadHash = stableHash({ status });
 								assigneeId: item.assigneeId,
 								plan: item.plan,
 								walkthrough: item.walkthrough,
-								blockedByTaskIds: item.blockedByTaskIds
+								blockedByTaskIds: resolvedBlockedByTaskIds
 							},
 							mcpContext: mcpPayload.mcpContext,
 							mcpEvent: mcpPayload.mcpEvent
 						};
-					}),
+					})
+				);
+
+				const bulkDto = {
+					tasks: bulkTasks,
 					operation_id_prefix: resolvedOperationIdPrefix
 				};
 
