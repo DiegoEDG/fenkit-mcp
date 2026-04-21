@@ -8,9 +8,33 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { CreateTaskInputSchema, CreateTaskBulkItemSchema } from '../../src/lib/schemas';
 
 // Test schema validation directly without complex mocks
 describe('MTB-01: CreateTaskInputSchema', () => {
+	it('should allow create task without plan/walkthrough/tags/dependencies', () => {
+		const parsed = CreateTaskInputSchema.parse({
+			title: 'Task without artifacts'
+		});
+
+		expect(parsed.title).toBe('Task without artifacts');
+		expect(parsed.plan).toBeUndefined();
+		expect(parsed.walkthrough).toBeUndefined();
+		expect(parsed.tags).toEqual([]);
+		expect(parsed.blockedByTaskIds).toEqual([]);
+	});
+
+	it('should accept null plan/walkthrough explicitly', () => {
+		const parsed = CreateTaskInputSchema.parse({
+			title: 'Task with null artifacts',
+			plan: null,
+			walkthrough: null
+		});
+
+		expect(parsed.plan).toBeNull();
+		expect(parsed.walkthrough).toBeNull();
+	});
+
 	it('should validate valid task input', () => {
 		// Schema is defined in schemas.ts - verify structure
 		const validInput = {
@@ -116,6 +140,17 @@ describe('MTB-01: CreateTaskMetadataSchema', () => {
 });
 
 describe('MTB-02: CreateTasksBulkInputSchema', () => {
+	it('bulk item should allow omitted plan/walkthrough/tags/dependencies', () => {
+		const parsed = CreateTaskBulkItemSchema.parse({
+			title: 'Bulk task'
+		});
+
+		expect(parsed.plan).toBeUndefined();
+		expect(parsed.walkthrough).toBeUndefined();
+		expect(parsed.tags).toEqual([]);
+		expect(parsed.blockedByTaskIds).toEqual([]);
+	});
+
 	it('should validate items array', () => {
 		const bulkInput = {
 			items: [

@@ -90,10 +90,10 @@ export const CreateTaskInputSchema = z.object({
   status: TaskStatusSchema.optional().describe('Initial status (default: todo). MCP/agentic flows cannot set this to "done"'),
   priority: TaskPrioritySchema.optional().describe('Initial priority (default: medium)'),
   assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID (UUID)'),
-  plan: MediumTextSchema.max(24000).optional().describe('Initial plan content (markdown)'),
-  walkthrough: MediumTextSchema.max(24000).optional().describe('Initial walkthrough content (markdown)'),
-  tags: z.array(ShortTextSchema).max(20).optional().describe('Tag names to associate'),
-  blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().describe('Task IDs that block this task'),
+  plan: MediumTextSchema.max(24000).nullish().describe('Initial plan content (markdown) - optional'),
+  walkthrough: MediumTextSchema.max(24000).nullish().describe('Initial walkthrough content (markdown) - optional'),
+  tags: z.array(ShortTextSchema).max(20).optional().default([]).describe('Tag names to associate'),
+  blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().default([]).describe('Task IDs that block this task'),
 }).strict();
 
 export const CreateTaskMetadataSchema = z.object({
@@ -115,10 +115,10 @@ export const CreateTaskBulkItemSchema = z.object({
   status: TaskStatusSchema.optional().describe('Initial status'),
   priority: TaskPrioritySchema.optional().describe('Initial priority'),
   assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID'),
-  plan: MediumTextSchema.max(24000).optional().describe('Initial plan'),
-  walkthrough: MediumTextSchema.max(24000).optional().describe('Initial walkthrough'),
-  tags: z.array(ShortTextSchema).max(20).optional().describe('Tag names'),
-  blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().describe('Blocker task IDs'),
+  plan: MediumTextSchema.max(24000).nullish().describe('Initial plan (optional)'),
+  walkthrough: MediumTextSchema.max(24000).nullish().describe('Initial walkthrough (optional)'),
+  tags: z.array(ShortTextSchema).max(20).optional().default([]).describe('Tag names'),
+  blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().default([]).describe('Blocker task IDs'),
 }).strict();
 
 export const CreateTasksBulkMetadataSchema = z.object({
