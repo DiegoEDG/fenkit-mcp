@@ -90,8 +90,6 @@ export const CreateTaskInputSchema = z.object({
   status: TaskStatusSchema.optional().describe('Initial status (default: todo). MCP/agentic flows cannot set this to "done"'),
   priority: TaskPrioritySchema.optional().describe('Initial priority (default: medium)'),
   assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID (UUID)'),
-  plan: MediumTextSchema.max(24000).nullish().describe('Initial plan content (markdown) - optional'),
-  walkthrough: MediumTextSchema.max(24000).nullish().describe('Initial walkthrough content (markdown) - optional'),
   tags: z.array(ShortTextSchema).max(20).optional().default([]).describe('Tag names to associate'),
   blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().default([]).describe('Task IDs that block this task'),
 }).strict();
@@ -115,8 +113,20 @@ export const CreateTaskBulkItemSchema = z.object({
   status: TaskStatusSchema.optional().describe('Initial status'),
   priority: TaskPrioritySchema.optional().describe('Initial priority'),
   assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID'),
-  plan: MediumTextSchema.max(24000).nullish().describe('Initial plan (optional)'),
-  walkthrough: MediumTextSchema.max(24000).nullish().describe('Initial walkthrough (optional)'),
+  client_ref: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9._:-]+$/, 'client_ref contains invalid characters')
+    .optional()
+    .describe('Client alias to support in-batch dependency references (e.g. "task-root")'),
+  blockedBy: z
+    .array(z.string().trim().min(1).max(80))
+    .max(20)
+    .optional()
+    .default([])
+    .describe('Dependency refs. Use task IDs for existing tasks and @client_ref for in-batch references'),
   tags: z.array(ShortTextSchema).max(20).optional().default([]).describe('Tag names'),
   blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().default([]).describe('Blocker task IDs'),
 }).strict();
@@ -125,6 +135,7 @@ export const CreateTasksBulkMetadataSchema = z.object({
   agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
   model: z.string().trim().min(1).max(120).describe('Model name'),
   operation_id_prefix: z.string().trim().min(8).max(128).optional().describe('Batch operation_id prefix for idempotent replay'),
+  atomic: z.boolean().optional().describe('When true, enforce bulk-level atomic intent (server support may vary by endpoint)'),
   tokens: TokensSchema.optional().describe('Optional cumulative token usage'),
   execution_mode: z.enum(['preview', 'execute']).optional().describe('Confirmation mode'),
   confirmation_token: z.string().trim().min(8).max(200).optional().describe('Token returned by preview mode'),

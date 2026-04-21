@@ -7,32 +7,19 @@
  * - Bulk limits
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { CreateTaskInputSchema, CreateTaskBulkItemSchema } from '../../src/lib/schemas';
 
 // Test schema validation directly without complex mocks
 describe('MTB-01: CreateTaskInputSchema', () => {
-	it('should allow create task without plan/walkthrough/tags/dependencies', () => {
+	it('should allow create task without artifacts/tags/dependencies', () => {
 		const parsed = CreateTaskInputSchema.parse({
 			title: 'Task without artifacts'
 		});
 
 		expect(parsed.title).toBe('Task without artifacts');
-		expect(parsed.plan).toBeUndefined();
-		expect(parsed.walkthrough).toBeUndefined();
 		expect(parsed.tags).toEqual([]);
 		expect(parsed.blockedByTaskIds).toEqual([]);
-	});
-
-	it('should accept null plan/walkthrough explicitly', () => {
-		const parsed = CreateTaskInputSchema.parse({
-			title: 'Task with null artifacts',
-			plan: null,
-			walkthrough: null
-		});
-
-		expect(parsed.plan).toBeNull();
-		expect(parsed.walkthrough).toBeNull();
 	});
 
 	it('should validate valid task input', () => {
@@ -71,15 +58,6 @@ describe('MTB-01: CreateTaskInputSchema', () => {
 		expect(input.assigneeId).toBeNull();
 	});
 
-	it('should accept optional plan', () => {
-		const input = { title: 'Task', plan: '# Plan\n- Step 1' };
-		expect(input.plan).toContain('Step');
-	});
-
-	it('should accept optional walkthrough', () => {
-		const input = { title: 'Task', walkthrough: '# Done\n- Completed' };
-		expect(input.walkthrough).toContain('Completed');
-	});
 
 	it('should accept optional tags array', () => {
 		const input = { title: 'Task', tags: ['feature', 'backend'] };
@@ -140,14 +118,13 @@ describe('MTB-01: CreateTaskMetadataSchema', () => {
 });
 
 describe('MTB-02: CreateTasksBulkInputSchema', () => {
-	it('bulk item should allow omitted plan/walkthrough/tags/dependencies', () => {
+	it('bulk item should allow omitted tags/dependencies', () => {
 		const parsed = CreateTaskBulkItemSchema.parse({
 			title: 'Bulk task'
 		});
 
-		expect(parsed.plan).toBeUndefined();
-		expect(parsed.walkthrough).toBeUndefined();
 		expect(parsed.tags).toEqual([]);
+		expect(parsed.blockedBy).toEqual([]);
 		expect(parsed.blockedByTaskIds).toEqual([]);
 	});
 

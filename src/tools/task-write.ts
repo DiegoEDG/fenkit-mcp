@@ -1260,7 +1260,7 @@ const payloadHash = stableHash({ status });
 		'sync_active_project_from_binding',
 		'Synchronize the active project from the local binding tracker to the local config file. Use this after binding a task in read-runtime mode.',
 		{},
-		async ({}, extra) => {
+		async (_args, extra) => {
 			const startedAt = Date.now();
 
 			try {
@@ -1363,7 +1363,7 @@ const payloadHash = stableHash({ status });
 
 				// Resolve operation_id
 				const resolvedOperationId = resolveOperationId({
-					operationId: parsedMetadata.operation_id,
+					...(parsedMetadata.operation_id ? { operationId: parsedMetadata.operation_id } : {}),
 					toolName: 'fenkit_write_create_task'
 				});
 				const resolvedAgent = resolveAgentName({
@@ -1388,31 +1388,6 @@ const payloadHash = stableHash({ status });
 				});
 				const taskContent = JSON.stringify(parsedTask);
 				const resolvedTokens = resolveTokens(taskContent, parsedMetadata.tokens);
-
-				// MTW-06: MCP/agentic flows CANNOT create tasks with status 'done'
-				if (parsedTask.status === 'done') {
-					trackToolCall({
-						tool: 'fenkit_write_create_task',
-						input: { operation_id: resolvedOperationId, status: parsedTask.status },
-						error: 'agentic_flow_cannot_create_done_task',
-						latencyMs: Date.now() - startedAt,
-						...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
-					});
-					return {
-						content: [
-							{
-								type: 'text' as const,
-								text: [
-									`❌ POLICY VIOLATION — MCP_Cannot_Create_Done`,
-									`reason: agentic_flow_cannot_create_done_task`,
-									`message: MCP/agentic flows cannot create tasks with status done. Only human users from UI can close tasks.`,
-									`result_code: policy_violation`
-								].join('\n')
-							}
-						],
-						isError: true
-					};
-				}
 
 				// Preview mode
 				if (resolvedExecutionMode === 'preview') {
@@ -1495,8 +1470,6 @@ const payloadHash = stableHash({ status });
 						status: parsedTask.status ?? 'todo',
 						priority: parsedTask.priority ?? 'medium',
 						assigneeId: parsedTask.assigneeId,
-						plan: parsedTask.plan,
-						walkthrough: parsedTask.walkthrough,
 						blockedByTaskIds: resolvedBlockedByTaskIds
 					},
 					mcpContext: mcpPayload.mcpContext,
@@ -1600,7 +1573,9 @@ const payloadHash = stableHash({ status });
 
 				// Resolve common fields
 				const resolvedOperationIdPrefix = resolveOperationId({
-					operationId: parsedMetadata.operation_id_prefix,
+					...(parsedMetadata.operation_id_prefix
+						? { operationId: parsedMetadata.operation_id_prefix }
+						: {}),
 					toolName: 'fenkit_write_create_tasks_bulk'
 				});
 				const resolvedAgent = resolveAgentName({
@@ -1697,9 +1672,18 @@ const payloadHash = stableHash({ status });
 							...withOptional('confirmation', confirmationMeta)
 						});
 
-						const resolvedBlockedByTaskIds = item.blockedByTaskIds?.length
-							? await resolveTaskIdentifiers(api, projectId, item.blockedByTaskIds)
-							: undefined;
+						const dependencyInputs = item.blockedBy?.length ? item.blockedBy : item.blockedByTaskIds;
+						const externalDependencies = dependencyInputs?.filter((dep) => !dep.startsWith('@')) ?? [];
+						const resolvedExternalDependencies = externalDependencies.length
+							? await resolveTaskIdentifiers(api, projectId, externalDependencies)
+							: [];
+						let externalDependencyCursor = 0;
+						const resolvedBlockedBy = (dependencyInputs ?? []).map((dep) => {
+							if (dep.startsWith('@')) return dep;
+							const resolved = resolvedExternalDependencies[externalDependencyCursor];
+							externalDependencyCursor += 1;
+							return resolved ?? dep;
+						});
 
 						return {
 							task: {
@@ -1708,10 +1692,10 @@ const payloadHash = stableHash({ status });
 								status: item.status ?? 'todo',
 								priority: item.priority ?? 'medium',
 								assigneeId: item.assigneeId,
-								plan: item.plan,
-								walkthrough: item.walkthrough,
-								blockedByTaskIds: resolvedBlockedByTaskIds
+								blockedByTaskIds: []
 							},
+							client_ref: item.client_ref,
+							blockedBy: resolvedBlockedBy,
 							mcpContext: mcpPayload.mcpContext,
 							mcpEvent: mcpPayload.mcpEvent
 						};
@@ -1720,7 +1704,8 @@ const payloadHash = stableHash({ status });
 
 				const bulkDto = {
 					tasks: bulkTasks,
-					operation_id_prefix: resolvedOperationIdPrefix
+					operation_id_prefix: resolvedOperationIdPrefix,
+					atomic: parsedMetadata.atomic ?? true
 				};
 
 				// Call backend bulk endpoint
