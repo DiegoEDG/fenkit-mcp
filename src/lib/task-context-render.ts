@@ -32,6 +32,39 @@ export function renderCompactContext(task: TaskResponse, maxChars: number): stri
 	}
 	sections.push('');
 
+	// M1: Dependency visibility section
+	if (task.blockedByTaskIds?.length) {
+		sections.push('## Dependencies');
+		// Show blocked by task IDs
+		const blockedByList = task.blockedByTaskIds
+			.map((id) => `\`${id.substring(0, 5)}\``)
+			.join(', ');
+		sections.push(`- **Blocked by**: ${task.blockedByTaskIds.length} task(s) — ${blockedByList}`);
+		if (task.blockedReason) {
+			sections.push(`- **Blocked reason**: ${task.blockedReason}`);
+		}
+		sections.push(`- **Ready to start**: ${task.isReadyToStart ? '✅ Yes' : '⏳ No'}`);
+		// Show per-blocker status if available
+		if (task.dependencyStatus?.length) {
+			const doneCount = task.dependencyStatus.filter(
+				(d) => d.status === 'done',
+			).length;
+			sections.push(
+				`- **Blocker status**: ${doneCount}/${task.dependencyStatus.length} done`,
+			);
+		}
+		sections.push('');
+	}
+
+	// M1: Show blocking tasks in compact context
+	if (task.blockingTaskIds?.length) {
+		const blockingList = task.blockingTaskIds
+			.map((id) => `\`${id.substring(0, 5)}\``)
+			.join(', ');
+		sections.push(`- **Blocking**: ${task.blockingTaskIds.length} task(s) — ${blockingList}`);
+		sections.push('');
+	}
+
 	sections.push('## Description (compact)');
 	sections.push(compactNarrative(task.description, maxChars) || '_(no description)_');
 	sections.push('');
@@ -77,6 +110,47 @@ export function renderFullContext(task: TaskResponse): string {
 		sections.push(`**Tags**: ${task.tags.map((t) => t.name).join(', ')}`);
 	}
 	sections.push('');
+
+	// M1: Full dependency visibility section
+	if (task.blockedByTaskIds?.length || task.blockingTaskIds?.length) {
+		sections.push('## Dependencies');
+		sections.push(`- **Is ready to start**: ${task.isReadyToStart ? '✅ Yes' : '⏳ No'}`);
+		// Show blocked by task IDs with short IDs
+		if (task.blockedByTaskIds?.length) {
+			const blockedByList = task.blockedByTaskIds
+				.map((id) => `\`${id.substring(0, 5)}\``)
+				.join(', ');
+			sections.push(
+				`- **Blocked by**: ${task.blockedByTaskIds.length} task(s) — ${blockedByList}`,
+			);
+		} else {
+			sections.push(`- **Blocked by**: 0 task(s)`);
+		}
+		if (task.blockedReason) {
+			sections.push(`- **Blocked reason**: ${task.blockedReason}`);
+		}
+		// Show blocking task IDs with short IDs
+		if (task.blockingTaskIds?.length) {
+			const blockingList = task.blockingTaskIds
+				.map((id) => `\`${id.substring(0, 5)}\``)
+				.join(', ');
+			sections.push(
+				`- **Blocking**: ${task.blockingTaskIds.length} task(s) — ${blockingList}`,
+			);
+		} else {
+			sections.push(`- **Blocking**: 0 task(s)`);
+		}
+		// Show detailed blocker status if available
+		if (task.dependencyStatus?.length) {
+			sections.push('');
+			sections.push('### Blocker Status');
+			for (const dep of task.dependencyStatus) {
+				const statusIcon = dep.status === 'done' ? '✅' : '⏳';
+				sections.push(`- ${statusIcon} \`${dep.taskId.substring(0, 5)}\` - ${dep.status}`);
+			}
+		}
+		sections.push('');
+	}
 
 	sections.push('## Description');
 	sections.push(task.description ? stripPrivate(task.description) : '_(no description)_');

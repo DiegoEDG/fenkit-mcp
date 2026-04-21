@@ -1,5 +1,10 @@
 import type { AxiosInstance } from 'axios';
 
+export interface DependencyStatusEntry {
+	taskId: string;
+	status: 'done' | 'not_done';
+}
+
 export interface TaskResponse {
 	id: string;
 	projectId: string;
@@ -16,6 +21,17 @@ export interface TaskResponse {
 	createdAt: string;
 	updatedAt: string;
 	tags?: { id: string; name: string; color: string | null }[];
+	// M1: Dependency fields for Contract & Visibility
+	blockedByTaskIds?: string[];
+	blockingTaskIds?: string[];
+	isBlocked?: boolean;
+	openBlockersCount?: number;
+	dependencyStatus?: DependencyStatusEntry[];
+	isReadyToStart?: boolean;
+	blockedReason?: string | null;
+	// Enriched dependency previews for UI badges
+	blockedBy?: { id: string; shortId: string; title: string; status: string; priority: string }[];
+	blocking?: { id: string; shortId: string; title: string; status: string; priority: string }[];
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

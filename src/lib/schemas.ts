@@ -146,3 +146,29 @@ export const CreateTasksBulkMetadataSchema = z.object({
 export const CreateTasksBulkInputSchema = z.object({
   items: z.array(CreateTaskBulkItemSchema).min(1).max(50).describe('Task items to create (max 50)'),
 }).strict();
+
+// ─── Bulk Input Sanitization Guard ─────────────────────────────────────────
+// Known allowed fields for bulk task creation (for defense-in-depth)
+const ALLOWED_BULK_TASK_FIELDS = new Set([
+  'title', 'description', 'status', 'priority', 'assigneeId',
+  'client_ref', 'blockedBy', 'tags', 'blockedByTaskIds'
+]);
+
+/**
+ * Sanitize bulk task items by stripping unknown fields before Zod validation.
+ * This prevents "should not exist" errors from the backend when AI agents
+ * incorrectly include unsupported fields like 'plan' or 'walkthrough'.
+ */
+export function sanitizeBulkTaskItems<T extends { [key: string]: unknown }[]>(items: T): T {
+  return items.map((item) => {
+    const sanitized: { [key: string]: unknown } = {};
+    for (const key of Object.keys(item)) {
+      if (ALLOWED_BULK_TASK_FIELDS.has(key)) {
+        sanitized[key] = item[key];
+      }
+      // Log stripped fields for debugging (in production, use debug logging)
+      // console.debug(`[sanitize] stripped unknown bulk field: ${key}`);
+    }
+    return sanitized as T[number];
+  }) as T;
+}

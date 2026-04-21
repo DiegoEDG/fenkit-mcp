@@ -16,7 +16,8 @@ import {
 	CreateTaskInputSchema,
 	CreateTaskMetadataSchema,
 	CreateTasksBulkInputSchema,
-	CreateTasksBulkMetadataSchema
+	CreateTasksBulkMetadataSchema,
+	sanitizeBulkTaskItems
 } from '@lib/schemas.js';
 import { resolveTaskByIdentifier, resolveTaskIdentifiers } from './task-common.js';
 import { stableHash, trackToolCall, extractPromptFromHeaders } from '@lib/observability.js';
@@ -1561,7 +1562,10 @@ const payloadHash = stableHash({ status });
 		async ({ items, metadata }, extra) => {
 			const startedAt = Date.now();
 			try {
-				const parsedItems = CreateTasksBulkInputSchema.parse(items);
+				// Sanitize bulk items: strip unknown fields before validation to prevent
+				// backend "should not exist" errors when unsupported fields are sent
+				const sanitizedItems = sanitizeBulkTaskItems(items.items);
+				const parsedItems = CreateTasksBulkInputSchema.parse({ items: sanitizedItems });
 				const parsedMetadata = CreateTasksBulkMetadataSchema.parse(metadata);
 
 				// Resolve project
