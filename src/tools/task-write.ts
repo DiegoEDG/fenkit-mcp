@@ -1752,67 +1752,29 @@ const payloadHash = stableHash({ status });
 				}
 
 				// Build graph-native bulk request DTO
-				const graphTasks = await Promise.all(
-					parsedInput.items.map(async (item, index) => {
-						const itemOperationId = resolvedOperationIdPrefix
-							? `${resolvedOperationIdPrefix}-${index}`
-							: `auto:create:${Date.now()}:${randomUUID().slice(0, 8)}`;
-
-						// Compute item-level payload hash
-						const itemPayloadHash = stableHash({ task: item, operationId: itemOperationId });
-
-						// Build MCP context for this item
-						const chatContext = resolveChatContext({
-							chatId: parsedMetadata.chat_id,
-							taskId: 'new',
-							requestHeaders: extra.requestInfo?.headers
-						});
-						const mcpPayload = buildMcpPayload({
-							toolName: 'fenkit_write_create_task_graph_bulk',
-							operationId: itemOperationId,
-							payloadHash: itemPayloadHash,
-							agent: resolvedAgent,
-							model: resolvedModel,
-							chatContext,
-							tokenSource: 'estimate',
-							tokens: {},
-							latencyMs: 0,
-							changedFields: ['id', 'title', 'status', 'priority', 'isRootTask'],
-							requestHeaders: extra.requestInfo?.headers,
-							...withOptional('confirmation', confirmationMeta)
-						});
-
-						// Resolve @client_ref dependencies to actual task IDs via backend
-						const dependencyInputs = item.blockedBy ?? [];
-						const resolvedBlockedBy = dependencyInputs.map((dep) => {
-							if (dep.startsWith('@')) {
-								// Keep @ references for backend resolution
-								return dep;
-							}
-							// External task IDs pass through as-is
+				const graphTasks = parsedInput.items.map((item) => {
+					// Resolve @client_ref dependencies
+					const resolvedBlockedBy = (item.blockedBy ?? []).map((dep) => {
+						if (dep.startsWith('@')) {
+							// Keep @ references for backend resolution
 							return dep;
-						});
+						}
+						// External task IDs pass through as-is
+						return dep;
+					});
 
-						return {
-							task: {
-								title: item.title,
-								description: item.description,
-								status: item.status ?? 'todo',
-								priority: item.priority ?? 'medium',
-								assigneeId: item.assigneeId,
-								blockedByTaskIds: [],
-								// Workstream fields are graph-level only
-								workstreamId: parsedInput.graph.workstreamId,
-								workstreamTag: parsedInput.graph.workstreamTag,
-								isRootTask: item.isRootTask ?? false,
-							},
-							client_ref: item.client_ref,
-							blockedBy: resolvedBlockedBy,
-							mcpContext: mcpPayload.mcpContext,
-							mcpEvent: mcpPayload.mcpEvent
-						};
-					})
-				);
+					return {
+						client_ref: item.client_ref,
+						title: item.title,
+						description: item.description,
+						status: item.status ?? 'todo',
+						priority: item.priority ?? 'medium',
+						assigneeId: item.assigneeId,
+						isRootTask: item.isRootTask ?? false,
+						blockedBy: resolvedBlockedBy,
+						tags: item.tags,
+					};
+				});
 
 				const graphBulkDto = {
 					graph: {
@@ -1823,7 +1785,7 @@ const payloadHash = stableHash({ status });
 						strictScope: parsedInput.graph.strictScope ?? true,
 						rootRef: parsedInput.graph.rootRef
 					},
-					tasks: graphTasks,
+					items: graphTasks,
 					operation_id_prefix: resolvedOperationIdPrefix,
 					atomic: parsedMetadata.atomic ?? true
 				};
