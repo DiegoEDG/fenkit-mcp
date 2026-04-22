@@ -262,6 +262,23 @@ function resolveOperationId(options: { operationId?: string; toolName: string })
 	return `auto:${options.toolName}:${Date.now()}:${randomUUID().slice(0, 8)}`;
 }
 
+function normalizeWorkstreamIdCandidate(value: string): string {
+	return value
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9:-]+/g, '-')
+		.replace(/-+/g, '-')
+		.replace(/^-|-$/g, '');
+}
+
+function deriveDefaultWorkstreamId(operationIdPrefix: string): string {
+	const normalized = normalizeWorkstreamIdCandidate(operationIdPrefix);
+	const base = normalized.length > 0 ? normalized : stableHash(operationIdPrefix).slice(0, 12);
+	const candidate = `ws:${base}`;
+	if (candidate.length <= 64) return candidate;
+	return `ws:${stableHash(operationIdPrefix).slice(0, 32)}`;
+}
+
 function toFiniteNumber(value: unknown): number | undefined {
 	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
@@ -1557,7 +1574,7 @@ const payloadHash = stableHash({ status });
 	 */
 	server.tool(
 		'fenkit_write_create_tasks_bulk',
-		'Create multiple tasks in bulk via MCP pipeline with per-item result reporting.',
+		'Create multiple tasks in bulk via MCP pipeline with per-item result reporting. For related graphs, this tool enforces/adopts a single workstream (defaultWorkstreamId or per-item workstreamId).',
 		{
 			items: CreateTasksBulkInputSchema.describe('Task items to create'),
 			metadata: CreateTasksBulkMetadataSchema.describe('Batch metadata envelope'),
@@ -1572,9 +1589,54 @@ const payloadHash = stableHash({ status });
 				const parsedItems = CreateTasksBulkInputSchema.parse({ items: sanitizedItems });
 				const parsedMetadata = CreateTasksBulkMetadataSchema.parse(metadata);
 
+				const enforceWorkstream = parsedMetadata.enforceWorkstream ?? true;
+
+				// Resolve common fields
+				const resolvedOperationIdPrefix = resolveOperationId({
+					...(parsedMetadata.operation_id_prefix
+						? { operationId: parsedMetadata.operation_id_prefix }
+						: {}),
+					toolName: 'fenkit_write_create_tasks_bulk'
+				});
+
 				// ─── Apply default workstream metadata from metadata ─────────────
-				// Default values are applied to items that don't specify their own workstream fields
-				const defaultWorkstreamId = parsedMetadata.defaultWorkstreamId;
+				// Default values are applied to items that don't specify their own workstream fields.
+				// If omitted and this is a true bulk graph, auto-generate deterministic workstream ID
+				// to improve agent adoption and consistency.
+				const hasDependencies = parsedItems.items.some((item) => {
+					const deps = item.blockedBy?.length ? item.blockedBy : item.blockedByTaskIds;
+					return (deps?.length ?? 0) > 0;
+				});
+				const hasMultipleItems = parsedItems.items.length > 1;
+				const allItemsHaveWorkstreamId = parsedItems.items.every((item) => {
+					const workstreamId = item.workstreamId?.trim();
+					return Boolean(workstreamId);
+				});
+
+				let defaultWorkstreamId = parsedMetadata.defaultWorkstreamId;
+				if (!defaultWorkstreamId && hasMultipleItems && !allItemsHaveWorkstreamId) {
+					defaultWorkstreamId = deriveDefaultWorkstreamId(resolvedOperationIdPrefix);
+				}
+
+				const shouldRequireWorkstream =
+					enforceWorkstream || (hasMultipleItems && hasDependencies);
+
+				if (shouldRequireWorkstream && !defaultWorkstreamId && !allItemsHaveWorkstreamId) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									'WORKSTREAM_POLICY_VIOLATION: bulk task graph requires workstream context.',
+									'Provide metadata.defaultWorkstreamId OR workstreamId on every item.',
+									'For related task graphs, pass dependencies via blockedBy/client_ref and keep one workstream.'
+								].join('\n')
+							}
+						],
+						isError: true
+					};
+				}
+
 				const defaultWorkstreamTag = parsedMetadata.defaultWorkstreamTag;
 
 				// Resolve project
@@ -1584,13 +1646,6 @@ const payloadHash = stableHash({ status });
 
 				const api = await getApiClientAsync();
 
-				// Resolve common fields
-				const resolvedOperationIdPrefix = resolveOperationId({
-					...(parsedMetadata.operation_id_prefix
-						? { operationId: parsedMetadata.operation_id_prefix }
-						: {}),
-					toolName: 'fenkit_write_create_tasks_bulk'
-				});
 				const resolvedAgent = resolveAgentName({
 					agent: parsedMetadata.agent,
 					requestHeaders: extra.requestInfo?.headers
@@ -1608,7 +1663,12 @@ const payloadHash = stableHash({ status });
 				if (resolvedExecutionMode === 'preview') {
 					const confirmation = issueConfirmationToken({
 						tool: 'fenkit_write_create_tasks_bulk',
-						payloadHash: stableHash({ items: parsedItems, operationIdPrefix: resolvedOperationIdPrefix }),
+						payloadHash: stableHash({
+							items: parsedItems,
+							operationIdPrefix: resolvedOperationIdPrefix,
+							defaultWorkstreamId,
+							enforceWorkstream
+						}),
 						scope: confirmationScope,
 						actor: resolvedAgent
 					});
@@ -1621,6 +1681,8 @@ const payloadHash = stableHash({ status });
 									`- project_id: ${projectId}`,
 									`- operation_id_prefix: ${resolvedOperationIdPrefix}`,
 									`- items_count: ${parsedItems.items.length}`,
+									`- workstream_default: ${defaultWorkstreamId ?? 'none'}`,
+									`- workstream_enforced: ${String(enforceWorkstream)}`,
 									`- max_items: 50`,
 									`- confirmation_token: ${confirmation.token}`,
 									`- confirmation_expires_at: ${confirmation.expiresAt}`,
@@ -1648,7 +1710,12 @@ const payloadHash = stableHash({ status });
 					confirmationMeta = consumeConfirmationToken({
 						token: parsedMetadata.confirmation_token,
 						tool: 'fenkit_write_create_tasks_bulk',
-						payloadHash: stableHash({ items: parsedItems, operationIdPrefix: resolvedOperationIdPrefix }),
+						payloadHash: stableHash({
+							items: parsedItems,
+							operationIdPrefix: resolvedOperationIdPrefix,
+							defaultWorkstreamId,
+							enforceWorkstream
+						}),
 						scope: confirmationScope,
 						actor: resolvedAgent
 					});

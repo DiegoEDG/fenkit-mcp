@@ -150,8 +150,9 @@ export const CreateTasksBulkMetadataSchema = z.object({
   chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier'),
   projectId: TaskIdentifierSchema.optional().describe('Project ID (optional if active project)'),
   // Default workstream fields applied to all items missing these fields
-  defaultWorkstreamId: z.string().trim().min(1).max(64).optional().describe('Default Workstream ID for items without workstreamId'),
+  defaultWorkstreamId: z.string().trim().min(1).max(64).optional().describe('Default Workstream ID for items without workstreamId. Recommended for ALL related bulk tasks; effectively required for multi-task dependency graphs unless every item provides workstreamId.'),
   defaultWorkstreamTag: ShortTextSchema.max(64).optional().describe('Default Workstream tag for items without workstreamTag'),
+  enforceWorkstream: z.boolean().optional().describe('When true (recommended/default behavior), bulk payloads should resolve to a single workstream for reliable dependency orchestration.'),
 }).strict();
 
 export const CreateTasksBulkInputSchema = z.object({
