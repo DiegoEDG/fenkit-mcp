@@ -1572,6 +1572,11 @@ const payloadHash = stableHash({ status });
 				const parsedItems = CreateTasksBulkInputSchema.parse({ items: sanitizedItems });
 				const parsedMetadata = CreateTasksBulkMetadataSchema.parse(metadata);
 
+				// ─── Apply default workstream metadata from metadata ─────────────
+				// Default values are applied to items that don't specify their own workstream fields
+				const defaultWorkstreamId = parsedMetadata.defaultWorkstreamId;
+				const defaultWorkstreamTag = parsedMetadata.defaultWorkstreamTag;
+
 				// Resolve project
 				const config = await requireProjectAsync();
 				const projectId = parsedMetadata.projectId ?? config.currentProjectId;
@@ -1701,10 +1706,10 @@ const payloadHash = stableHash({ status });
 								priority: item.priority ?? 'medium',
 								assigneeId: item.assigneeId,
 								blockedByTaskIds: [],
-								// Workstream fields for scoped execution
-								workstreamId: item.workstreamId,
+								// Workstream fields: use item value, fallback to metadata defaults
+								workstreamId: item.workstreamId ?? defaultWorkstreamId ?? undefined,
 								rootTaskId: item.rootTaskId,
-								workstreamTag: item.workstreamTag,
+								workstreamTag: item.workstreamTag ?? defaultWorkstreamTag ?? undefined,
 							},
 							client_ref: item.client_ref,
 							blockedBy: resolvedBlockedBy,

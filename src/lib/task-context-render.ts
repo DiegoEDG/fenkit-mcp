@@ -30,6 +30,16 @@ export function renderCompactContext(task: TaskResponse, maxChars: number): stri
 	if (task.tags?.length) {
 		sections.push(`**Tags**: ${task.tags.map((t) => t.name).join(', ')}`);
 	}
+
+	// Workstream fields for scoped execution
+	if (task.workstreamId || task.workstreamTag || task.rootTaskId) {
+		sections.push('## Workstream');
+		if (task.workstreamId) sections.push(`- **ID**: ${task.workstreamId}`);
+		if (task.rootTaskId) sections.push(`- **Root**: ${task.rootTaskId.substring(0, 5)}`);
+		if (task.workstreamTag) sections.push(`- **Tag**: ${task.workstreamTag}`);
+		sections.push('');
+	}
+
 	sections.push('');
 
 	// M1: Dependency visibility section
@@ -109,6 +119,16 @@ export function renderFullContext(task: TaskResponse): string {
 	if (task.tags?.length) {
 		sections.push(`**Tags**: ${task.tags.map((t) => t.name).join(', ')}`);
 	}
+
+	// Workstream fields for scoped execution
+	if (task.workstreamId || task.workstreamTag || task.rootTaskId) {
+		sections.push('## Workstream');
+		if (task.workstreamId) sections.push(`- **ID**: ${task.workstreamId}`);
+		if (task.rootTaskId) sections.push(`- **Root**: ${task.rootTaskId.substring(0, 5)}`);
+		if (task.workstreamTag) sections.push(`- **Tag**: ${task.workstreamTag}`);
+		sections.push('');
+	}
+
 	sections.push('');
 
 	// M1: Full dependency visibility section

@@ -149,6 +149,9 @@ export const CreateTasksBulkMetadataSchema = z.object({
   confirmation_token: z.string().trim().min(8).max(200).optional().describe('Token returned by preview mode'),
   chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier'),
   projectId: TaskIdentifierSchema.optional().describe('Project ID (optional if active project)'),
+  // Default workstream fields applied to all items missing these fields
+  defaultWorkstreamId: z.string().trim().min(1).max(64).optional().describe('Default Workstream ID for items without workstreamId'),
+  defaultWorkstreamTag: ShortTextSchema.max(64).optional().describe('Default Workstream tag for items without workstreamTag'),
 }).strict();
 
 export const CreateTasksBulkInputSchema = z.object({
@@ -159,7 +162,9 @@ export const CreateTasksBulkInputSchema = z.object({
 // Known allowed fields for bulk task creation (for defense-in-depth)
 const ALLOWED_BULK_TASK_FIELDS = new Set([
   'title', 'description', 'status', 'priority', 'assigneeId',
-  'client_ref', 'blockedBy', 'tags', 'blockedByTaskIds'
+  'client_ref', 'blockedBy', 'tags', 'blockedByTaskIds',
+  // Workstream fields for scoped execution
+  'workstreamId', 'rootTaskId', 'workstreamTag'
 ]);
 
 /**
