@@ -15,9 +15,9 @@ import {
 	WalkthroughSchema,
 	CreateTaskInputSchema,
 	CreateTaskMetadataSchema,
-	CreateTasksBulkInputSchema,
-	CreateTasksBulkMetadataSchema,
-	sanitizeBulkTaskItems
+	CreateTaskGraphBulkInputSchema,
+	CreateTaskGraphBulkMetadataSchema,
+	sanitizeGraphTaskItems
 } from '@lib/schemas.js';
 import { resolveTaskByIdentifier, resolveTaskIdentifiers } from './task-common.js';
 import { stableHash, trackToolCall, extractPromptFromHeaders } from '@lib/observability.js';
@@ -260,23 +260,6 @@ function resolveOperationId(options: { operationId?: string; toolName: string })
 		if (trimmed.length > 0) return trimmed;
 	}
 	return `auto:${options.toolName}:${Date.now()}:${randomUUID().slice(0, 8)}`;
-}
-
-function normalizeWorkstreamIdCandidate(value: string): string {
-	return value
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9:-]+/g, '-')
-		.replace(/-+/g, '-')
-		.replace(/^-|-$/g, '');
-}
-
-function deriveDefaultWorkstreamId(operationIdPrefix: string): string {
-	const normalized = normalizeWorkstreamIdCandidate(operationIdPrefix);
-	const base = normalized.length > 0 ? normalized : stableHash(operationIdPrefix).slice(0, 12);
-	const candidate = `ws:${base}`;
-	if (candidate.length <= 64) return candidate;
-	return `ws:${stableHash(operationIdPrefix).slice(0, 32)}`;
 }
 
 function toFiniteNumber(value: unknown): number | undefined {
@@ -1567,69 +1550,47 @@ const payloadHash = stableHash({ status });
 		}
 	);
 
-	// ─── MTB-04: fenkit_write_create_tasks_bulk ────────────────────────────────────────────
+// ─── MTB-05: fenkit_write_create_task_graph_bulk ───────────────────────────────────
 	/**
-	 * Create multiple tasks in one call with per-item result reporting.
-	 * Supports partial failure - each item is processed independently.
+	 * Create multiple tasks as a graph with shared graph-level metadata.
+	 * Graph mode defines workstream context once and applies it to all items.
 	 */
 	server.tool(
-		'fenkit_write_create_tasks_bulk',
-		'Create multiple tasks in bulk via MCP pipeline with per-item result reporting. For related graphs, this tool enforces/adopts a single workstream (defaultWorkstreamId or per-item workstreamId).',
+		'fenkit_write_create_task_graph_bulk',
+		'Create multiple tasks as a graph with shared graph-level metadata. Graph mode defines workstream context once and applies it to all items, supporting root task resolution, scope enforcement, and atomic transactions.',
 		{
-			items: CreateTasksBulkInputSchema.describe('Task items to create'),
-			metadata: CreateTasksBulkMetadataSchema.describe('Batch metadata envelope'),
+			graph: CreateTaskGraphBulkInputSchema.shape.graph.describe('Graph-level metadata'),
+			items: CreateTaskGraphBulkInputSchema.shape.items.describe('Task items to create'),
+			metadata: CreateTaskGraphBulkMetadataSchema.describe('Batch metadata envelope'),
 		},
 		{ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
-		async ({ items, metadata }, extra) => {
+		async ({ graph, items, metadata }, extra) => {
 			const startedAt = Date.now();
 			try {
-				// Sanitize bulk items: strip unknown fields before validation to prevent
-				// backend "should not exist" errors when unsupported fields are sent
-				const sanitizedItems = sanitizeBulkTaskItems(items.items);
-				const parsedItems = CreateTasksBulkInputSchema.parse({ items: sanitizedItems });
-				const parsedMetadata = CreateTasksBulkMetadataSchema.parse(metadata);
-
-				const enforceWorkstream = parsedMetadata.enforceWorkstream ?? true;
+				// Sanitize graph items: strip unknown fields before validation
+				const sanitizedItems = sanitizeGraphTaskItems(items);
+				const parsedInput = CreateTaskGraphBulkInputSchema.parse({ graph, items: sanitizedItems });
+				const parsedMetadata = CreateTaskGraphBulkMetadataSchema.parse(metadata);
 
 				// Resolve common fields
 				const resolvedOperationIdPrefix = resolveOperationId({
 					...(parsedMetadata.operation_id_prefix
 						? { operationId: parsedMetadata.operation_id_prefix }
 						: {}),
-					toolName: 'fenkit_write_create_tasks_bulk'
+					toolName: 'fenkit_write_create_task_graph_bulk'
 				});
 
-				// ─── Apply default workstream metadata from metadata ─────────────
-				// Default values are applied to items that don't specify their own workstream fields.
-				// If omitted and this is a true bulk graph, auto-generate deterministic workstream ID
-				// to improve agent adoption and consistency.
-				const hasDependencies = parsedItems.items.some((item) => {
-					const deps = item.blockedBy?.length ? item.blockedBy : item.blockedByTaskIds;
-					return (deps?.length ?? 0) > 0;
-				});
-				const hasMultipleItems = parsedItems.items.length > 1;
-				const allItemsHaveWorkstreamId = parsedItems.items.every((item) => {
-					const workstreamId = item.workstreamId?.trim();
-					return Boolean(workstreamId);
-				});
-
-				let defaultWorkstreamId = parsedMetadata.defaultWorkstreamId;
-				if (!defaultWorkstreamId && hasMultipleItems && !allItemsHaveWorkstreamId) {
-					defaultWorkstreamId = deriveDefaultWorkstreamId(resolvedOperationIdPrefix);
-				}
-
-				const shouldRequireWorkstream =
-					enforceWorkstream || (hasMultipleItems && hasDependencies);
-
-				if (shouldRequireWorkstream && !defaultWorkstreamId && !allItemsHaveWorkstreamId) {
+				// Validate graph items have client_ref for graph mode
+				const itemsWithoutClientRef = parsedInput.items.filter((item) => !item.client_ref);
+				if (itemsWithoutClientRef.length > 0) {
 					return {
 						content: [
 							{
 								type: 'text' as const,
 								text: [
-									'WORKSTREAM_POLICY_VIOLATION: bulk task graph requires workstream context.',
-									'Provide metadata.defaultWorkstreamId OR workstreamId on every item.',
-									'For related task graphs, pass dependencies via blockedBy/client_ref and keep one workstream.'
+									'GRAPH_VALIDATION_ERROR: Graph mode requires client_ref on all items.',
+									`Missing client_ref on ${itemsWithoutClientRef.length} item(s).`,
+									'Use client_ref to enable in-batch dependency resolution via @client_ref.'
 								].join('\n')
 							}
 						],
@@ -1637,7 +1598,71 @@ const payloadHash = stableHash({ status });
 					};
 				}
 
-				const defaultWorkstreamTag = parsedMetadata.defaultWorkstreamTag;
+				// Validate root resolution strategy
+				const rootRef = parsedInput.graph.rootRef;
+				const hasExplicitRoots = parsedInput.items.some((item) => item.isRootTask);
+				let rootResolutionStrategy: string;
+				if (rootRef) {
+					rootResolutionStrategy = `rootRef: ${rootRef}`;
+				} else if (hasExplicitRoots) {
+					rootResolutionStrategy = 'isRootTask flag';
+				} else {
+					rootResolutionStrategy = 'inferred (first item)';
+				}
+
+				// Check for rootRef validity if provided
+				if (rootRef && !parsedInput.items.find((item) => item.client_ref === rootRef)) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									'GRAPH_VALIDATION_ERROR: rootRef not found in items.',
+									`rootRef "${rootRef}" does not match any client_ref.`,
+									'Available client_refs: ' + parsedInput.items.map((i) => i.client_ref).join(', ')
+								].join('\n')
+							}
+						],
+						isError: true
+					};
+				}
+
+				// Validate dependencies reference valid client_refs or task IDs
+				const clientRefs = new Set(parsedInput.items.map((item) => item.client_ref));
+				const invalidDeps: string[] = [];
+				for (const item of parsedInput.items) {
+					if (item.blockedBy) {
+						for (const dep of item.blockedBy) {
+							// Skip external task IDs (those without @ prefix)
+							if (!dep.startsWith('@') && !clientRefs.has(dep)) {
+								// Could be an external task ID, that's valid
+								continue;
+							}
+							// For @ references, validate they point to known client_refs
+							if (dep.startsWith('@')) {
+								const refTarget = dep.slice(1);
+								if (!clientRefs.has(refTarget)) {
+									invalidDeps.push(`${item.client_ref} -> ${dep}`);
+								}
+							}
+						}
+					}
+				}
+				if (invalidDeps.length > 0) {
+					return {
+						content: [
+							{
+								type: 'text' as const,
+								text: [
+									'GRAPH_VALIDATION_ERROR: Invalid dependency references.',
+									...invalidDeps.map((d) => `  - ${d}`),
+									'All @client_ref references must point to items in this batch.'
+								].join('\n')
+							}
+						],
+						isError: true
+					};
+				}
 
 				// Resolve project
 				const config = await requireProjectAsync();
@@ -1657,33 +1682,39 @@ const payloadHash = stableHash({ status });
 
 				// Resolve execution mode
 				const resolvedExecutionMode = resolveExecutionMode(parsedMetadata.execution_mode);
-				const confirmationScope = `task:${projectId}:bulk-create`;
+				const confirmationScope = `task:${projectId}:graph-bulk-create`;
 
 				// Preview mode
 				if (resolvedExecutionMode === 'preview') {
 					const confirmation = issueConfirmationToken({
-						tool: 'fenkit_write_create_tasks_bulk',
+						tool: 'fenkit_write_create_task_graph_bulk',
 						payloadHash: stableHash({
-							items: parsedItems,
-							operationIdPrefix: resolvedOperationIdPrefix,
-							defaultWorkstreamId,
-							enforceWorkstream
+							graph: parsedInput.graph,
+							items: parsedInput.items,
+							operationIdPrefix: resolvedOperationIdPrefix
 						}),
 						scope: confirmationScope,
 						actor: resolvedAgent
 					});
+
+					const strictScope = parsedInput.graph.strictScope ?? true;
+					const atomic = parsedMetadata.atomic ?? true;
+
 					return {
 						content: [
 							{
 								type: 'text' as const,
 								text: [
-									`## fenkit_write_create_tasks_bulk · preview`,
+									`## fenkit_write_create_task_graph_bulk · preview`,
 									`- project_id: ${projectId}`,
 									`- operation_id_prefix: ${resolvedOperationIdPrefix}`,
-									`- items_count: ${parsedItems.items.length}`,
-									`- workstream_default: ${defaultWorkstreamId ?? 'none'}`,
-									`- workstream_enforced: ${String(enforceWorkstream)}`,
-									`- max_items: 50`,
+									`- item_count: ${parsedInput.items.length}`,
+									`- root_resolution_strategy: ${rootResolutionStrategy}`,
+									`- workstream_id: ${parsedInput.graph.workstreamId ?? 'auto-generated'}`,
+									`- workstream_tag: ${parsedInput.graph.workstreamTag ?? 'none'}`,
+									`- scope_key: ${parsedInput.graph.scopeKey}`,
+									`- strict_scope: ${String(strictScope)}`,
+									`- atomic: ${String(atomic)}`,
 									`- confirmation_token: ${confirmation.token}`,
 									`- confirmation_expires_at: ${confirmation.expiresAt}`,
 									`- result_code: preview_ready`
@@ -1709,21 +1740,20 @@ const payloadHash = stableHash({ status });
 					}
 					confirmationMeta = consumeConfirmationToken({
 						token: parsedMetadata.confirmation_token,
-						tool: 'fenkit_write_create_tasks_bulk',
+						tool: 'fenkit_write_create_task_graph_bulk',
 						payloadHash: stableHash({
-							items: parsedItems,
-							operationIdPrefix: resolvedOperationIdPrefix,
-							defaultWorkstreamId,
-							enforceWorkstream
+							graph: parsedInput.graph,
+							items: parsedInput.items,
+							operationIdPrefix: resolvedOperationIdPrefix
 						}),
 						scope: confirmationScope,
 						actor: resolvedAgent
 					});
 				}
 
-				// Build bulk request DTO
-				const bulkTasks = await Promise.all(
-					parsedItems.items.map(async (item, index) => {
+				// Build graph-native bulk request DTO
+				const graphTasks = await Promise.all(
+					parsedInput.items.map(async (item, index) => {
 						const itemOperationId = resolvedOperationIdPrefix
 							? `${resolvedOperationIdPrefix}-${index}`
 							: `auto:create:${Date.now()}:${randomUUID().slice(0, 8)}`;
@@ -1738,7 +1768,7 @@ const payloadHash = stableHash({ status });
 							requestHeaders: extra.requestInfo?.headers
 						});
 						const mcpPayload = buildMcpPayload({
-							toolName: 'fenkit_write_create_tasks_bulk',
+							toolName: 'fenkit_write_create_task_graph_bulk',
 							operationId: itemOperationId,
 							payloadHash: itemPayloadHash,
 							agent: resolvedAgent,
@@ -1747,22 +1777,20 @@ const payloadHash = stableHash({ status });
 							tokenSource: 'estimate',
 							tokens: {},
 							latencyMs: 0,
-							changedFields: ['id', 'title', 'status', 'priority'],
+							changedFields: ['id', 'title', 'status', 'priority', 'isRootTask'],
 							requestHeaders: extra.requestInfo?.headers,
 							...withOptional('confirmation', confirmationMeta)
 						});
 
-						const dependencyInputs = item.blockedBy?.length ? item.blockedBy : item.blockedByTaskIds;
-						const externalDependencies = dependencyInputs?.filter((dep) => !dep.startsWith('@')) ?? [];
-						const resolvedExternalDependencies = externalDependencies.length
-							? await resolveTaskIdentifiers(api, projectId, externalDependencies)
-							: [];
-						let externalDependencyCursor = 0;
-						const resolvedBlockedBy = (dependencyInputs ?? []).map((dep) => {
-							if (dep.startsWith('@')) return dep;
-							const resolved = resolvedExternalDependencies[externalDependencyCursor];
-							externalDependencyCursor += 1;
-							return resolved ?? dep;
+						// Resolve @client_ref dependencies to actual task IDs via backend
+						const dependencyInputs = item.blockedBy ?? [];
+						const resolvedBlockedBy = dependencyInputs.map((dep) => {
+							if (dep.startsWith('@')) {
+								// Keep @ references for backend resolution
+								return dep;
+							}
+							// External task IDs pass through as-is
+							return dep;
 						});
 
 						return {
@@ -1773,10 +1801,10 @@ const payloadHash = stableHash({ status });
 								priority: item.priority ?? 'medium',
 								assigneeId: item.assigneeId,
 								blockedByTaskIds: [],
-								// Workstream fields: use item value, fallback to metadata defaults
-								workstreamId: item.workstreamId ?? defaultWorkstreamId ?? undefined,
-								rootTaskId: item.rootTaskId,
-								workstreamTag: item.workstreamTag ?? defaultWorkstreamTag ?? undefined,
+								// Workstream fields are graph-level only
+								workstreamId: parsedInput.graph.workstreamId,
+								workstreamTag: parsedInput.graph.workstreamTag,
+								isRootTask: item.isRootTask ?? false,
 							},
 							client_ref: item.client_ref,
 							blockedBy: resolvedBlockedBy,
@@ -1786,40 +1814,66 @@ const payloadHash = stableHash({ status });
 					})
 				);
 
-				const bulkDto = {
-					tasks: bulkTasks,
+				const graphBulkDto = {
+					graph: {
+						workstreamId: parsedInput.graph.workstreamId,
+						workstreamTag: parsedInput.graph.workstreamTag,
+						scopeKey: parsedInput.graph.scopeKey,
+						contextSummary: parsedInput.graph.contextSummary,
+						strictScope: parsedInput.graph.strictScope ?? true,
+						rootRef: parsedInput.graph.rootRef
+					},
+					tasks: graphTasks,
 					operation_id_prefix: resolvedOperationIdPrefix,
 					atomic: parsedMetadata.atomic ?? true
 				};
 
-				// Call backend bulk endpoint
-				const response = await api.post(`/projects/${projectId}/tasks/bulk`, bulkDto);
-				const bulkResponse = response.data;
+				// Call backend graph-bulk endpoint
+				const response = await api.post(`/projects/${projectId}/tasks/graph-bulk`, graphBulkDto);
+				const graphBulkResponse = response.data;
 
-				// Map backend response to MCP-friendly format
-				const results = bulkResponse.results ?? [];
+				// Map backend response to MCP-friendly format including graph identity
+				const results = graphBulkResponse.results ?? [];
 				const summaryLines = [
-					`✔ Bulk create completed`,
-					``,
-					`**Total items**: ${results.length}`,
-					`**Created**: ${bulkResponse.created ?? 0}`,
-					`**Replayed**: ${bulkResponse.replayed ?? 0}`,
-					`**Conflicts**: ${bulkResponse.conflicts ?? 0}`,
-					`**Errors**: ${bulkResponse.errors ?? 0}`,
+					`✔ Graph bulk create completed`,
 					``
 				];
 
-				// Add per-item details
+				// Add graph identity section
+				const workstreamId = graphBulkResponse.workstream_id ?? parsedInput.graph.workstreamId ?? 'N/A';
+				const rootTaskId = graphBulkResponse.root_task_id ?? 'N/A';
+				const workstreamTag = graphBulkResponse.workstream_tag ?? parsedInput.graph.workstreamTag ?? 'none';
+				const scopeKey = graphBulkResponse.scope_key ?? parsedInput.graph.scopeKey ?? 'N/A';
+				const strictScope = graphBulkResponse.strict_scope ?? (parsedInput.graph.strictScope ?? true);
+
+				summaryLines.push('**Graph Identity**:');
+				summaryLines.push(`- workstream_id: ${workstreamId}`);
+				summaryLines.push(`- root_task_id: ${rootTaskId}`);
+				summaryLines.push(`- workstream_tag: ${workstreamTag}`);
+				summaryLines.push(`- scope_key: ${scopeKey}`);
+				summaryLines.push(`- strict_scope: ${strictScope}`);
+				summaryLines.push(``);
+
+				summaryLines.push(`**Total items**: ${results.length}`);
+				summaryLines.push(`**Created**: ${graphBulkResponse.created ?? 0}`);
+				summaryLines.push(`**Replayed**: ${graphBulkResponse.replayed ?? 0}`);
+				summaryLines.push(`**Conflicts**: ${graphBulkResponse.conflicts ?? 0}`);
+				summaryLines.push(`**Errors**: ${graphBulkResponse.errors ?? 0}`);
+				summaryLines.push(``);
+
+				// Add per-item details with client_ref mapping
 				const detailLines: string[] = [];
 				for (const result of results) {
 					const status = result.status ?? 'error';
 					const taskId = result.task_id ?? result.replayed_task_id ?? 'N/A';
+					const clientRef = result.client_ref ?? 'N/A';
 					let line = `- [${status.toUpperCase()}]`;
 					if (status === 'created' || status === 'replayed') {
-						line += ` ${taskId.substring(0, 5)}`;
+						line += ` ${taskId.substring(0, 5)} (client_ref: ${clientRef})`;
 					} else {
 						line += ` ${result.error_code ?? 'unknown'}`;
 						if (result.error_reason) line += `: ${result.error_reason.substring(0, 40)}`;
+						line += ` (client_ref: ${clientRef})`;
 					}
 					detailLines.push(line);
 				}
@@ -1832,10 +1886,10 @@ const payloadHash = stableHash({ status });
 				}
 
 				// Determine overall result_code
-				const hasErrors = (bulkResponse.errors ?? 0) > 0;
-				const hasConflicts = (bulkResponse.conflicts ?? 0) > 0;
+				const hasErrors = (graphBulkResponse.errors ?? 0) > 0;
+				const hasConflicts = (graphBulkResponse.conflicts ?? 0) > 0;
 				let resultCode = 'created';
-				if (hasErrors && (bulkResponse.created ?? 0) === 0) {
+				if (hasErrors && (graphBulkResponse.created ?? 0) === 0) {
 					resultCode = 'failed';
 				} else if (hasErrors || hasConflicts) {
 					resultCode = 'partial';
@@ -1844,13 +1898,19 @@ const payloadHash = stableHash({ status });
 				summaryLines.push(`**result_code**: ${resultCode}`);
 
 				trackToolCall({
-					tool: 'fenkit_write_create_tasks_bulk',
-					input: { operation_id_prefix: resolvedOperationIdPrefix, items_count: parsedItems.items.length },
+					tool: 'fenkit_write_create_task_graph_bulk',
+					input: {
+						operation_id_prefix: resolvedOperationIdPrefix,
+						items_count: parsedInput.items.length,
+						scope_key: parsedInput.graph.scopeKey
+					},
 					output: {
-						created: bulkResponse.created ?? 0,
-						replayed: bulkResponse.replayed ?? 0,
-						conflicts: bulkResponse.conflicts ?? 0,
-						errors: bulkResponse.errors ?? 0
+						created: graphBulkResponse.created ?? 0,
+						replayed: graphBulkResponse.replayed ?? 0,
+						conflicts: graphBulkResponse.conflicts ?? 0,
+						errors: graphBulkResponse.errors ?? 0,
+						workstream_id: workstreamId,
+						root_task_id: rootTaskId
 					},
 					latencyMs: Date.now() - startedAt,
 					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
@@ -1866,8 +1926,11 @@ const payloadHash = stableHash({ status });
 				};
 			} catch (error) {
 				trackToolCall({
-					tool: 'fenkit_write_create_tasks_bulk',
-					input: { operation_id_prefix: metadata?.operation_id_prefix, items_count: items?.items?.length },
+					tool: 'fenkit_write_create_task_graph_bulk',
+					input: {
+						operation_id_prefix: metadata?.operation_id_prefix,
+						items_count: items?.items?.length
+					},
 					error: error instanceof Error ? error.message : String(error),
 					latencyMs: Date.now() - startedAt,
 					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
@@ -1875,11 +1938,11 @@ const payloadHash = stableHash({ status });
 				if (error instanceof z.ZodError) {
 					const issues = error.issues.map((i) => `- ${i.path.join('.')}: ${i.message}`).join('\n');
 					return {
-						content: [{ type: 'text' as const, text: `INVALID_INPUT: Bulk validation failed:\n${issues}` }],
+						content: [{ type: 'text' as const, text: `INVALID_INPUT: Graph bulk validation failed:\n${issues}` }],
 						isError: true
 					};
 				}
-				throwAsMcpError(error, { toolName: 'fenkit_write_create_tasks_bulk' });
+				throwAsMcpError(error, { toolName: 'fenkit_write_create_task_graph_bulk' });
 			}
 		}
 	);

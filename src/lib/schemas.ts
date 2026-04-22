@@ -109,79 +109,68 @@ export const CreateTaskMetadataSchema = z.object({
   projectId: TaskIdentifierSchema.optional().describe('Project ID (optional if active project)'),
 }).strict();
 
-// ─── MTB-02: Create Tasks Bulk Input Schema ─────────────────────────────────────────
-// MCP create_tasks_bulk input: items array + batch metadata
-export const CreateTaskBulkItemSchema = z.object({
+// ─── Graph-Native Bulk Schema (PRD Workstream Graph Bulk Creation) ───────────
+// Graph-level metadata defined once for the entire task graph
+export const TaskGraphContextSchema = z.object({
+  workstreamId: z.string().trim().min(1).max(64).optional().describe('Workstream ID for the graph. Auto-generated if not provided.'),
+  workstreamTag: ShortTextSchema.max(64).describe('Semantic tag for the workstream.'),
+  scopeKey: z.string().trim().min(1).max(120).describe('Machine-readable scope identifier (e.g. "feature/workstream-bulk-creation").'),
+  contextSummary: z.string().trim().min(1).max(2000).describe('Short natural-language explanation of what this graph represents.'),
+  strictScope: z.boolean().optional().default(true).describe('When true, execution is scoped to this graph only.'),
+  rootRef: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9._:-]+$/).optional().describe('Optional alias pointing to the root task client_ref.'),
+}).strict();
+
+// Item-level fields for graph mode - client_ref required, workstream fields disallowed (graph-level only)
+export const CreateTaskGraphItemSchema = z.object({
+  client_ref: z.string().trim().min(1).max(64).regex(/^[a-zA-Z0-9._:-]+$/, 'client_ref contains invalid characters').describe('Client alias for in-batch dependency references. Required in graph mode.'),
   title: ShortTextSchema.describe('Task title'),
   description: MediumTextSchema.max(12000).optional().describe('Task description'),
   status: TaskStatusSchema.optional().describe('Initial status'),
   priority: TaskPrioritySchema.optional().describe('Initial priority'),
   assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID'),
-  client_ref: z
-    .string()
-    .trim()
-    .min(1)
-    .max(64)
-    .regex(/^[a-zA-Z0-9._:-]+$/, 'client_ref contains invalid characters')
-    .optional()
-    .describe('Client alias to support in-batch dependency references (e.g. "task-root")'),
-  blockedBy: z
-    .array(z.string().trim().min(1).max(80))
-    .max(20)
-    .optional()
-    .default([])
-    .describe('Dependency refs. Use task IDs for existing tasks and @client_ref for in-batch references'),
+  isRootTask: z.boolean().optional().default(false).describe('When true, this item is the root task of the graph.'),
+  blockedBy: z.array(z.string().trim().min(1).max(80)).max(20).optional().default([]).describe('Dependency refs. Use task IDs for existing tasks and @client_ref for in-batch references.'),
   tags: z.array(ShortTextSchema).max(20).optional().default([]).describe('Tag names'),
-  blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().default([]).describe('Blocker task IDs'),
-  // Workstream fields for scoped execution
-  workstreamId: z.string().trim().min(1).max(64).optional().describe('Workstream ID - groups related tasks'),
-  rootTaskId: z.string().uuid().optional().describe('Root task ID for workstream hierarchy'),
-  workstreamTag: ShortTextSchema.max(64).optional().describe('Workstream tag for semantic grouping'),
 }).strict();
 
-export const CreateTasksBulkMetadataSchema = z.object({
+// Batch metadata for graph mode - no defaultWorkstream* fields (graph-level now)
+export const CreateTaskGraphBulkMetadataSchema = z.object({
   agent: z.string().trim().min(1).max(80).describe('Agent/client name'),
   model: z.string().trim().min(1).max(120).describe('Model name'),
   operation_id_prefix: z.string().trim().min(8).max(128).optional().describe('Batch operation_id prefix for idempotent replay'),
-  atomic: z.boolean().optional().describe('When true, enforce bulk-level atomic intent (server support may vary by endpoint)'),
+  atomic: z.boolean().optional().default(true).describe('When true, entire graph is persisted in a single transaction.'),
   tokens: TokensSchema.optional().describe('Optional cumulative token usage'),
   execution_mode: z.enum(['preview', 'execute']).optional().describe('Confirmation mode'),
   confirmation_token: z.string().trim().min(8).max(200).optional().describe('Token returned by preview mode'),
   chat_id: z.string().trim().min(1).max(120).describe('Chat/thread identifier'),
   projectId: TaskIdentifierSchema.optional().describe('Project ID (optional if active project)'),
-  // Default workstream fields applied to all items missing these fields
-  defaultWorkstreamId: z.string().trim().min(1).max(64).optional().describe('Default Workstream ID for items without workstreamId. Recommended for ALL related bulk tasks; effectively required for multi-task dependency graphs unless every item provides workstreamId.'),
-  defaultWorkstreamTag: ShortTextSchema.max(64).optional().describe('Default Workstream tag for items without workstreamTag'),
-  enforceWorkstream: z.boolean().optional().describe('When true (recommended/default behavior), bulk payloads should resolve to a single workstream for reliable dependency orchestration.'),
 }).strict();
 
-export const CreateTasksBulkInputSchema = z.object({
-  items: z.array(CreateTaskBulkItemSchema).min(1).max(50).describe('Task items to create (max 50)'),
+// Top-level graph bulk input
+export const CreateTaskGraphBulkInputSchema = z.object({
+  graph: TaskGraphContextSchema.describe('Graph-level metadata defined once for the entire task graph.'),
+  items: z.array(CreateTaskGraphItemSchema).min(1).max(50).describe('Task items to create (max 50).'),
 }).strict();
 
-// ─── Bulk Input Sanitization Guard ─────────────────────────────────────────
-// Known allowed fields for bulk task creation (for defense-in-depth)
-const ALLOWED_BULK_TASK_FIELDS = new Set([
-  'title', 'description', 'status', 'priority', 'assigneeId',
-  'client_ref', 'blockedBy', 'tags', 'blockedByTaskIds',
-  // Workstream fields for scoped execution
-  'workstreamId', 'rootTaskId', 'workstreamTag'
+// Graph mode sanitization allowlist (workstream fields are graph-level only)
+const ALLOWED_GRAPH_TASK_FIELDS = new Set([
+  'client_ref', 'title', 'description', 'status', 'priority', 'assigneeId',
+  'isRootTask', 'blockedBy', 'tags'
 ]);
 
 /**
- * Sanitize bulk task items by stripping unknown fields before Zod validation.
- * This prevents "should not exist" errors from the backend when AI agents
- * incorrectly include unsupported fields like 'plan' or 'walkthrough'.
+ * Sanitize graph task items by stripping unknown fields before Zod validation.
+ * Graph mode disallows per-item workstream fields (those are graph-level only).
  */
-export function sanitizeBulkTaskItems<T extends { [key: string]: unknown }[]>(items: T): T {
+export function sanitizeGraphTaskItems<T extends { [key: string]: unknown }[]>(items: T): T {
   return items.map((item) => {
     const sanitized: { [key: string]: unknown } = {};
     for (const key of Object.keys(item)) {
-      if (ALLOWED_BULK_TASK_FIELDS.has(key)) {
+      if (ALLOWED_GRAPH_TASK_FIELDS.has(key)) {
         sanitized[key] = item[key];
       }
       // Log stripped fields for debugging (in production, use debug logging)
-      // console.debug(`[sanitize] stripped unknown bulk field: ${key}`);
+      // console.debug(`[sanitize] stripped unknown graph field: ${key}`);
     }
     return sanitized as T[number];
   }) as T;
