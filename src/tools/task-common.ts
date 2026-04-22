@@ -21,7 +21,11 @@ export interface TaskResponse {
 	createdAt: string;
 	updatedAt: string;
 	tags?: { id: string; name: string; color: string | null }[];
-	// M1: Dependency fields for Contract & Visibility
+	// Workstream fields for scoped execution
+	workstreamId?: string | null;
+	rootTaskId?: string | null;
+	workstreamTag?: string | null;
+	// Dependency fields for Contract & Visibility
 	blockedByTaskIds?: string[];
 	blockingTaskIds?: string[];
 	isBlocked?: boolean;
