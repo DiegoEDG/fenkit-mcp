@@ -86,7 +86,9 @@ export async function saveConfigAsync(config: Partial<FnkConfig>): Promise<void>
   try {
     await fs.writeFile(CONFIG_FILE, JSON.stringify(merged, null, 2), 'utf-8');
   } catch (err) {
-    throw new Error(`Failed to save config: ${err instanceof Error ? err.message : 'unknown error'}`);
+    throw new Error(`Failed to save config: ${err instanceof Error ? err.message : 'unknown error'}`, {
+      cause: err,
+    });
   }
 
   if (process.platform !== 'win32') {
