@@ -92,6 +92,10 @@ export const CreateTaskInputSchema = z.object({
   assigneeId: z.string().uuid().nullable().optional().describe('Assignee user ID (UUID)'),
   tags: z.array(ShortTextSchema).max(20).optional().default([]).describe('Tag names to associate'),
   blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().default([]).describe('Task IDs that block this task'),
+  // Workstream fields for scoped execution
+  workstreamId: z.string().trim().min(1).max(64).optional().describe('Workstream ID - groups related tasks'),
+  rootTaskId: z.string().uuid().optional().describe('Root task ID for workstream hierarchy'),
+  workstreamTag: ShortTextSchema.max(64).optional().describe('Workstream tag for semantic grouping'),
 }).strict();
 
 export const CreateTaskMetadataSchema = z.object({
@@ -129,6 +133,10 @@ export const CreateTaskBulkItemSchema = z.object({
     .describe('Dependency refs. Use task IDs for existing tasks and @client_ref for in-batch references'),
   tags: z.array(ShortTextSchema).max(20).optional().default([]).describe('Tag names'),
   blockedByTaskIds: z.array(TaskIdentifierSchema).max(20).optional().default([]).describe('Blocker task IDs'),
+  // Workstream fields for scoped execution
+  workstreamId: z.string().trim().min(1).max(64).optional().describe('Workstream ID - groups related tasks'),
+  rootTaskId: z.string().uuid().optional().describe('Root task ID for workstream hierarchy'),
+  workstreamTag: ShortTextSchema.max(64).optional().describe('Workstream tag for semantic grouping'),
 }).strict();
 
 export const CreateTasksBulkMetadataSchema = z.object({

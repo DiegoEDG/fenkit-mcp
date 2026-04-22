@@ -1471,7 +1471,11 @@ const payloadHash = stableHash({ status });
 						status: parsedTask.status ?? 'todo',
 						priority: parsedTask.priority ?? 'medium',
 						assigneeId: parsedTask.assigneeId,
-						blockedByTaskIds: resolvedBlockedByTaskIds
+						blockedByTaskIds: resolvedBlockedByTaskIds,
+						// Workstream fields for scoped execution
+						workstreamId: parsedTask.workstreamId,
+						rootTaskId: parsedTask.rootTaskId,
+						workstreamTag: parsedTask.workstreamTag,
 					},
 					mcpContext: mcpPayload.mcpContext,
 					mcpEvent: mcpPayload.mcpEvent
@@ -1696,7 +1700,11 @@ const payloadHash = stableHash({ status });
 								status: item.status ?? 'todo',
 								priority: item.priority ?? 'medium',
 								assigneeId: item.assigneeId,
-								blockedByTaskIds: []
+								blockedByTaskIds: [],
+								// Workstream fields for scoped execution
+								workstreamId: item.workstreamId,
+								rootTaskId: item.rootTaskId,
+								workstreamTag: item.workstreamTag,
 							},
 							client_ref: item.client_ref,
 							blockedBy: resolvedBlockedBy,
