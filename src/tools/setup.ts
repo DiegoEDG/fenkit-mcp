@@ -91,6 +91,93 @@ function writeFenkitProtocolToSharedRulesFile(filePath: string): void {
   }
 }
 
+// ─── Insights Bridge Bootstrap Protocol ────────────────────────────────────────
+// Written to client rule files so the agent knows to bootstrap the Insights Bridge
+// at session start. This ensures deterministic startup across all supported clients.
+const INSIGHTS_BOOTSTRAP_PROTOCOL = `## Insights Bridge Bootstrap Protocol
+
+The Insights Bridge provides AI memory and knowledge graph capabilities. It MUST be running for Insights features to work.
+
+### Bootstrap Flow (ALWAYS follow this order)
+
+1. Check bridge status:
+   - Call \`insights_bridge_status\` MCP tool
+   - OR run \`fenkit-insights status\` in terminal
+
+2. If \`installStatus\` is \`not_installed\`:
+   - Run: \`npm install -g fenkit-insights\`
+   - Then proceed to step 3
+
+3. If \`initStatus\` is \`not_initialized\`:
+   - Call \`insights_bridge_init\` MCP tool with { project: "<project-name>" }
+   - OR run: \`fenkit-insights init\`
+
+4. If \`runStatus\` is \`not_running\`:
+   - Call \`insights_bridge_start\` MCP tool
+   - OR run: \`fenkit-insights start\`
+
+5. If \`healthStatus\` is \`unhealthy\`:
+   - Call \`insights_bridge_doctor\` MCP tool for diagnostics
+   - Follow the recommendations returned
+
+6. Once \`healthStatus\` is \`healthy\` or \`degraded\`, proceed with normal Insights flow.
+
+### Bridge Commands
+
+\`\`\`bash
+fenkit-insights init      # Initialize configuration
+fenkit-insights start     # Start bridge (default port 7438)
+fenkit-insights stop      # Stop bridge
+fenkit-insights status    # Check runtime status
+fenkit-insights doctor    # Full diagnostics
+\`\`\`
+
+### MCP Tools Available
+
+- \`insights_bridge_status\` — Check install/init/run/health status
+- \`insights_bridge_init\` — Initialize bridge configuration
+- \`insights_bridge_start\` — Start the bridge process
+- \`insights_bridge_doctor\` — Run full diagnostics
+- \`insights_get_context\` — Get project context (sessions, observations, prompts)
+- \`insights_search\` — Search observations and prompts
+- \`insights_refresh\` — Trigger reconciliation with memory provider
+- \`insights_delete\` — Delete an insight item (irreversible)
+- \`insights_sync_status\` — Get sync status for a project
+
+### Important Rules
+
+- NEVER call Engram provider directly — always go through the bridge
+- The bridge runs on http://localhost:7438 by default
+- If bridge is missing, show install instructions to user
+- Degraded mode (provider unreachable) still allows local reads`;
+
+const INSIGHTS_PROTOCOL_START = '<!-- INSIGHTS_BOOTSTRAP_PROTOCOL:START -->';
+const INSIGHTS_PROTOCOL_END = '<!-- INSIGHTS_BOOTSTRAP_PROTOCOL:END -->';
+
+function wrapInsightsProtocolBlock(protocol: string): string {
+  return `${INSIGHTS_PROTOCOL_START}\n${protocol}\n${INSIGHTS_PROTOCOL_END}`;
+}
+
+function upsertInsightsProtocol(content: string): string {
+  const wrapped = wrapInsightsProtocolBlock(INSIGHTS_BOOTSTRAP_PROTOCOL);
+  const markerRegex = new RegExp(`${INSIGHTS_PROTOCOL_START}[\\s\\S]*?${INSIGHTS_PROTOCOL_END}`, 'm');
+  if (markerRegex.test(content)) {
+    return content.replace(markerRegex, wrapped);
+  }
+  const trimmed = content.trimEnd();
+  if (!trimmed) return wrapped;
+  return `${trimmed}\n\n${wrapped}`;
+}
+
+function writeInsightsProtocolToRulesFile(filePath: string): void {
+  ensureDir(filePath);
+  const current = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
+  const next = upsertInsightsProtocol(current);
+  if (next !== current) {
+    fs.writeFileSync(filePath, next, 'utf-8');
+  }
+}
+
 // ─── Config Path Helpers ───────────────────────────────────────────────────────
 
 export type ClientType =
@@ -314,8 +401,13 @@ export function setupCodex(serverPath: string): { path: string; action: string }
 
   ensureDir(configPath);
 
-  // Write fenkit-instructions.md
-  fs.writeFileSync(instructionsPath, wrapFenkitProtocolBlock(FENKIT_MEMORY_PROTOCOL), 'utf-8');
+  // Write fenkit-instructions.md with both Fenkit and Insights protocols
+  const combinedInstructions = [
+    wrapFenkitProtocolBlock(FENKIT_MEMORY_PROTOCOL),
+    '',
+    wrapInsightsProtocolBlock(INSIGHTS_BOOTSTRAP_PROTOCOL),
+  ].join('\n');
+  fs.writeFileSync(instructionsPath, combinedInstructions, 'utf-8');
 
   // Read existing TOML config or start fresh
   let tomlContent = '';
@@ -337,7 +429,46 @@ export function setupCodex(serverPath: string): { path: string; action: string }
   tomlContent = upsertTomlServerBlock(tomlContent, 'fenkit_admin', adminBlock);
 
   fs.writeFileSync(configPath, tomlContent, 'utf-8');
-  return { path: configPath, action: `Updated ${configPath} and wrote ${instructionsPath}` };
+
+  // Create wrapper script for Codex
+  const wrapperPath = path.join(homeDir, '.codex', 'fenkit-insights-wrapper.sh');
+  const wrapperScript = `#!/bin/bash
+# Fenkit Insights Bridge Wrapper for Codex
+# Ensures bridge is running before starting Codex session
+
+set -e
+
+# Check if bridge is installed
+if ! command -v fenkit-insights &> /dev/null; then
+  echo "⚠️  fenkit-insights not installed. Installing..."
+  npm install -g fenkit-insights
+fi
+
+# Check bridge status
+STATUS=$(fenkit-insights status 2>&1 || true)
+
+# Initialize if needed
+if echo "$STATUS" | grep -q "not_initialized"; then
+  echo "🔧 Initializing Insights Bridge..."
+  fenkit-insights init
+fi
+
+# Start if not running
+if echo "$STATUS" | grep -q "not_running"; then
+  echo "🚀 Starting Insights Bridge on port 7438..."
+  fenkit-insights start 7438 &
+  sleep 2
+fi
+
+echo "✅ Insights Bridge ready"
+echo "Starting Codex session..."
+
+# Launch codex with remaining args
+exec codex "$@"
+`;
+  fs.writeFileSync(wrapperPath, wrapperScript, { mode: 0o755 });
+
+  return { path: configPath, action: `Updated ${configPath}, wrote ${instructionsPath}, created wrapper at ${wrapperPath}` };
 }
 
 export function setupOpenCode(serverPath: string): { path: string; action: string } {
@@ -364,9 +495,14 @@ export function setupOpenCode(serverPath: string): { path: string; action: strin
   config['mcp'] = mcp;
 
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+  // Upsert Insights Bootstrap protocol in opencode AGENTS.md
+  const rulesPath = path.join(process.cwd(), 'AGENTS.md');
+  writeInsightsProtocolToRulesFile(rulesPath);
+
   return {
     path: configPath,
-    action: 'Updated opencode.json (mcp.fenkit_read + mcp.fenkit_write + mcp.fenkit_admin)'
+    action: 'Updated opencode.json (mcp config) and AGENTS.md (Insights Bootstrap)'
   };
 }
 
@@ -385,7 +521,10 @@ export function setupClaudeCode(serverPath: string): { path: string; action: str
   const rulesPath = path.join(process.cwd(), '.clauderules');
   writeFenkitProtocolToSharedRulesFile(rulesPath);
 
-  return { path: configPath, action: 'Updated ~/.claude/config.json and .clauderules' };
+  // Upsert Insights Bootstrap protocol
+  writeInsightsProtocolToRulesFile(rulesPath);
+
+  return { path: configPath, action: 'Updated ~/.claude/config.json, .clauderules (Fenkit + Insights)' };
 }
 
 // ─── Tool Registration ─────────────────────────────────────────────────────────
@@ -453,6 +592,12 @@ export function registerSetupTools(server: McpServer): void {
           `2. Run \`get_status\` to verify authentication.`,
           `3. Use \`login\` to authenticate if not yet authenticated.`,
         ];
+
+        if (client === 'claudecode' || client === 'opencode' || client === 'codex') {
+          lines.push('');
+          lines.push('**Insights Bridge**: Bootstrap protocol added to rules file.');
+          lines.push('The agent will automatically check and start the bridge at session start.');
+        }
 
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
       } catch (error) {
@@ -566,9 +711,17 @@ export function registerSetupTools(server: McpServer): void {
           `args = ["${serverPath}", "--mode=admin"]`,
           '```',
           '',
-          `Also create \`${codexInstructionsPath()}\` with the Fenkit protocol:`,
+          `Also create \`${codexInstructionsPath()}\` with both Fenkit and Insights protocols:`,
           '```markdown',
           FENKIT_MEMORY_PROTOCOL,
+          '',
+          INSIGHTS_BOOTSTRAP_PROTOCOL,
+          '```',
+          '',
+          '### Wrapper Script',
+          'Run `~/.codex/fenkit-insights-wrapper.sh` instead of `codex` to auto-start the bridge.',
+          '```bash',
+          '~/.codex/fenkit-insights-wrapper.sh',
           '```',
         ].join('\n'),
 
@@ -596,6 +749,11 @@ export function registerSetupTools(server: McpServer): void {
           '  }',
           '}',
           '```',
+          '',
+          'Also add to `AGENTS.md` in your project root (Insights Bridge Bootstrap):',
+          '```markdown',
+          INSIGHTS_BOOTSTRAP_PROTOCOL,
+          '```',
         ].join('\n'),
         claudecode: [
           `**Claude Code** — Edit \`${claudeCodeConfigPath()}\`:`,
@@ -609,9 +767,14 @@ export function registerSetupTools(server: McpServer): void {
           '}',
           '```',
           '',
-          'Also add to `.clauderules` in your project root:',
+          'Also add to `.clauderules` in your project root (Fenkit Task Protocol):',
           '```markdown',
           FENKIT_MEMORY_PROTOCOL,
+          '```',
+          '',
+          'Also add to `.clauderules` in your project root (Insights Bridge Bootstrap):',
+          '```markdown',
+          INSIGHTS_BOOTSTRAP_PROTOCOL,
           '```',
         ].join('\n'),
       };
