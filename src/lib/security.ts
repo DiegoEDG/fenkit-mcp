@@ -1,4 +1,4 @@
-const PROD_APP_URL = 'https://ickit-fe.vercel.app';
+const PROD_APP_URL = 'https://fenkit.vercel.app';
 const PROD_API_URL = 'https://ickit-be.vercel.app/api/v1';
 
 const LOCAL_APP_URL = 'http://localhost:5173';
