@@ -1675,10 +1675,6 @@ const payloadHash = stableHash({ status });
 					agent: parsedMetadata.agent,
 					requestHeaders: extra.requestInfo?.headers
 				});
-				const resolvedModel = resolveModelName({
-					model: parsedMetadata.model,
-					requestHeaders: extra.requestInfo?.headers
-				});
 
 				// Resolve execution mode
 				const resolvedExecutionMode = resolveExecutionMode(parsedMetadata.execution_mode);
@@ -1875,6 +1871,7 @@ const payloadHash = stableHash({ status });
 						root_task_id: rootTaskId
 					},
 					latencyMs: Date.now() - startedAt,
+					...withOptional('confirmation', confirmationMeta),
 					...withOptional('prompt', extractPromptFromHeaders(extra.requestInfo?.headers))
 				});
 
@@ -1891,7 +1888,7 @@ const payloadHash = stableHash({ status });
 					tool: 'fenkit_write_create_task_graph_bulk',
 					input: {
 						operation_id_prefix: metadata?.operation_id_prefix,
-						items_count: items?.items?.length
+						items_count: items?.length
 					},
 					error: error instanceof Error ? error.message : String(error),
 					latencyMs: Date.now() - startedAt,

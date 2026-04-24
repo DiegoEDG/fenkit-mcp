@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { CreateTaskInputSchema, CreateTaskBulkItemSchema } from '../../src/lib/schemas';
+import { CreateTaskInputSchema, CreateTaskGraphItemSchema } from '../../src/lib/schemas';
 
 // Test schema validation directly without complex mocks
 describe('MTB-01: CreateTaskInputSchema', () => {
@@ -119,13 +119,13 @@ describe('MTB-01: CreateTaskMetadataSchema', () => {
 
 describe('MTB-02: CreateTasksBulkInputSchema', () => {
 	it('bulk item should allow omitted tags/dependencies', () => {
-		const parsed = CreateTaskBulkItemSchema.parse({
-			title: 'Bulk task'
+		const parsed = CreateTaskGraphItemSchema.parse({
+			title: 'Bulk task',
+			client_ref: 'test-ref-1'
 		});
 
 		expect(parsed.tags).toEqual([]);
 		expect(parsed.blockedBy).toEqual([]);
-		expect(parsed.blockedByTaskIds).toEqual([]);
 	});
 
 	it('should validate items array', () => {

@@ -28,7 +28,18 @@ export const TOOL_CAPABILITIES: Record<string, ToolCapability> = {
 
 	// setup
 	setup_client: 'admin',
-	get_setup_instructions: 'admin'
+	get_setup_instructions: 'admin',
+
+	// insights
+	insights_get_context: 'read',
+	insights_search: 'read',
+	insights_refresh: 'write',
+	insights_delete: 'write',
+	insights_sync_status: 'read',
+	insights_bridge_status: 'read',
+	insights_bridge_init: 'write',
+	insights_bridge_start: 'write',
+	insights_bridge_doctor: 'read'
 };
 
 const READ_TOOLS = new Set(

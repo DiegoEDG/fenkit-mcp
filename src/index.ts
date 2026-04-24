@@ -9,6 +9,7 @@ import { registerTaskWriteTools } from './tools/task-write.js';
 import { registerSetupTools, setupHandlers, CLIENTS, ClientType } from './tools/setup.js';
 import { registerContextResources } from './resources/contextual.js';
 import { registerLifecyclePrompts } from './prompts/lifecycle.js';
+import { registerInsightsTools } from './tools/insights.js';
 import { assertToolCapabilityRegistry } from './lib/tool-capabilities.js';
 import { createLogger } from './lib/logger.js';
 
@@ -65,17 +66,20 @@ async function main(): Promise<void> {
 	if (mode === 'admin') {
 		registerAuthTools(server, { includeLogin: true, includeStatus: true });
 		registerSetupTools(server);
+		registerInsightsTools(server);
 	} else if (mode === 'read-runtime') {
 		registerAuthTools(server, { includeLogin: false, includeStatus: true });
 		registerProjectTools(server);
 		registerTaskReadTools(server);
 		registerContextResources(server);
 		registerLifecyclePrompts(server);
+		registerInsightsTools(server);
 	} else {
 		registerAuthTools(server, { includeLogin: false, includeStatus: true });
 		registerProjectTools(server);
 		registerTaskWriteTools(server);
 		registerLifecyclePrompts(server);
+		registerInsightsTools(server);
 	}
 
 	// Default: Start MCP Server
