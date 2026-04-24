@@ -111,6 +111,7 @@ The Insights Bridge provides AI memory and knowledge graph capabilities. It MUST
 3. If \`initStatus\` is \`not_initialized\`:
    - Call \`insights_bridge_init\` MCP tool with { project: "<project-name>" }
    - OR run: \`fenkit-insights init\`
+   - **Important**: After init, start the Engram provider: \`engram serve\` (default port 7437)
 
 4. If \`runStatus\` is \`not_running\`:
    - Call \`insights_bridge_start\` MCP tool
@@ -130,6 +131,7 @@ fenkit-insights start     # Start bridge (default port 7438)
 fenkit-insights stop      # Stop bridge
 fenkit-insights status    # Check runtime status
 fenkit-insights doctor    # Full diagnostics
+engram serve              # Start Engram provider (port 7437) — required for full functionality
 \`\`\`
 
 ### MCP Tools Available
@@ -148,8 +150,10 @@ fenkit-insights doctor    # Full diagnostics
 
 - NEVER call Engram provider directly — always go through the bridge
 - The bridge runs on http://localhost:7438 by default
+- The Engram provider runs on http://localhost:7437 by default
 - If bridge is missing, show install instructions to user
-- Degraded mode (provider unreachable) still allows local reads`;
+- Degraded mode (provider unreachable) still allows local reads
+- If provider is unreachable, remind the user to run \`engram serve\``;
 
 const INSIGHTS_PROTOCOL_START = '<!-- INSIGHTS_BOOTSTRAP_PROTOCOL:START -->';
 const INSIGHTS_PROTOCOL_END = '<!-- INSIGHTS_BOOTSTRAP_PROTOCOL:END -->';
