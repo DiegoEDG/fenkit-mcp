@@ -438,7 +438,7 @@ fi
 # Start if not running
 if echo "$STATUS" | grep -q "not_running"; then
   echo "🚀 Starting Insights Bridge on port 7438..."
-  fenkit-insights start 7438 &
+  fenkit-insights run &
   sleep 2
 fi
 
