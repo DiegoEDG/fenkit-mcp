@@ -92,68 +92,46 @@ function writeFenkitProtocolToSharedRulesFile(filePath: string): void {
 }
 
 // ─── Insights Bridge Bootstrap Protocol ────────────────────────────────────────
-// Written to client rule files so the agent knows to bootstrap the Insights Bridge
-// at session start. This ensures deterministic startup across all supported clients.
-const INSIGHTS_BOOTSTRAP_PROTOCOL = `## Insights Bridge Bootstrap Protocol
+// Written to client rule files so the agent knows how Insights work
+// in the FENKIT platform. This ensures consistent behavior across all supported clients.
+const INSIGHTS_BOOTSTRAP_PROTOCOL = `## FENKIT Insights Protocol
 
-The Insights Bridge provides AI memory and knowledge graph capabilities. It MUST be running for Insights features to work.
+The FENKIT backend is the single source of truth for insights (observations). The local bridge is a session-scoped sync worker that copies Engram observations into the backend.
 
-### Bootstrap Flow (ALWAYS follow this order)
+### Architecture
 
-1. Check bridge status:
-   - Call \`insights_bridge_status\` MCP tool
-   - OR run \`fenkit-insights status\` in terminal
+- **Engram** (port 7437): Local memory provider — stores raw observations
+- **Bridge Worker**: Session-scoped sync worker — copies Engram data to backend
+- **FENKIT Backend**: Canonical storage and query API for all consumers
+- **MCP Tools**: Talk directly to the FENKIT backend API
 
-2. If \`installStatus\` is \`not_installed\`:
-   - Run: \`npm install -g fenkit-insights\`
-   - Then proceed to step 3
+### Prerequisites
 
-3. If \`initStatus\` is \`not_initialized\`:
-   - Call \`insights_bridge_init\` MCP tool with { project: "<project-name>" }
-   - OR run: \`fenkit-insights init\`
-   - **Important**: After init, start the Engram provider: \`engram serve\` (default port 7437)
+1. **Engram provider must be running**: \`engram serve\` (default port 7437)
+2. **Bridge worker auto-starts** when the coding session begins
 
-4. If \`runStatus\` is \`not_running\`:
-   - Call \`insights_bridge_start\` MCP tool
-   - OR run: \`fenkit-insights start\`
-
-5. If \`healthStatus\` is \`unhealthy\`:
-   - Call \`insights_bridge_doctor\` MCP tool for diagnostics
-   - Follow the recommendations returned
-
-6. Once \`healthStatus\` is \`healthy\` or \`degraded\`, proceed with normal Insights flow.
-
-### Bridge Commands
+### Bridge Commands (for manual operation)
 
 \`\`\`bash
-fenkit-insights init      # Initialize configuration
-fenkit-insights start     # Start bridge (default port 7438)
-fenkit-insights stop      # Stop bridge
-fenkit-insights status    # Check runtime status
-fenkit-insights doctor    # Full diagnostics
-engram serve              # Start Engram provider (port 7437) — required for full functionality
+fenkit-insights run         # Start session-scoped sync worker
+fenkit-insights sync-once   # Run one sync pass, then exit
+fenkit-insights status      # Check local worker diagnostics
+engram serve                # Start Engram provider (port 7437) — required
 \`\`\`
 
 ### MCP Tools Available
 
-- \`insights_bridge_status\` — Check install/init/run/health status
-- \`insights_bridge_init\` — Initialize bridge configuration
-- \`insights_bridge_start\` — Start the bridge process
-- \`insights_bridge_doctor\` — Run full diagnostics
-- \`insights_get_context\` — Get project context (sessions, observations, prompts)
-- \`insights_search\` — Search observations and prompts
-- \`insights_refresh\` — Trigger reconciliation with memory provider
-- \`insights_delete\` — Delete an insight item (irreversible)
-- \`insights_sync_status\` — Get sync status for a project
+- \`insights_get_context\` — Get project observations from the FENKIT backend
+- \`insights_search\` — Search observations in the FENKIT backend
+- \`insights_delete\` — Delete an insight item from the FENKIT backend
+- \`insights_sync_status\` — Get sync status from the FENKIT backend
 
 ### Important Rules
 
-- NEVER call Engram provider directly — always go through the bridge
-- The bridge runs on http://localhost:7438 by default
-- The Engram provider runs on http://localhost:7437 by default
-- If bridge is missing, show install instructions to user
-- Degraded mode (provider unreachable) still allows local reads
-- If provider is unreachable, remind the user to run \`engram serve\``;
+- NEVER call Engram provider directly — always use MCP tools or the backend API
+- The backend is the ONLY source of truth for reads
+- The bridge worker handles sync automatically during the session
+- If Engram is unreachable, remind the user to run \`engram serve\``;
 
 const INSIGHTS_PROTOCOL_START = '<!-- INSIGHTS_BOOTSTRAP_PROTOCOL:START -->';
 const INSIGHTS_PROTOCOL_END = '<!-- INSIGHTS_BOOTSTRAP_PROTOCOL:END -->';
