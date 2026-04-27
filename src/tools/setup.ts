@@ -105,19 +105,27 @@ The FENKIT backend is the single source of truth for insights (observations). Th
 - **FENKIT Backend**: Canonical storage and query API for all consumers
 - **MCP Tools**: Talk directly to the FENKIT backend API
 
-### Prerequisites
+### Auto-Bootstrap Behavior
 
-1. **Engram provider must be running**: \`engram serve\` (default port 7437)
-2. **Bridge worker auto-starts** when the coding session begins
+The MCP server attempts to auto-start the bridge when the session begins:
+1. Check if bridge is running on localhost:7438
+2. If not running, call POST /bridge/init (idempotent)
+3. Then call POST /bridge/start to launch the background worker
+4. This is fire-and-forget — it does not block server startup
 
-### Bridge Commands (for manual operation)
+If auto-bootstrap fails, the bridge tools will return degraded status and actionable guidance.
 
-\`\`\`bash
-fenkit-insights run         # Start session-scoped sync worker
-fenkit-insights sync-once   # Run one sync pass, then exit
-fenkit-insights status      # Check local worker diagnostics
-engram serve                # Start Engram provider (port 7437) — required
-\`\`\`
+### Session-End Cleanup
+
+When the MCP session ends (SIGTERM/SIGINT), a final sync is triggered before shutdown. This ensures recent Engram writes are less likely to remain unsynced.
+
+### Manual Bridge Commands
+
+    fenkit-insights run         # Start bridge worker + HTTP server
+    fenkit-insights sync-once   # Run one sync pass, then exit
+    fenkit-insights status      # Check bridge diagnostics
+    fenkit-insights doctor      # Full health check with recommendations
+    engram serve                # Start Engram provider (port 7437) — required
 
 ### MCP Tools Available
 

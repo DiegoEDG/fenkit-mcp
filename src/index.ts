@@ -12,6 +12,7 @@ import { registerLifecyclePrompts } from './prompts/lifecycle.js';
 import { registerInsightsTools } from './tools/insights.js';
 import { assertToolCapabilityRegistry } from './lib/tool-capabilities.js';
 import { createLogger } from './lib/logger.js';
+import { autoBootstrapInsights, registerShutdownHandlers } from './lib/insights-bootstrap.js';
 
 type ServerMode = 'read-runtime' | 'write-runtime' | 'admin';
 const logger = createLogger('index');
@@ -81,6 +82,18 @@ async function main(): Promise<void> {
 		registerLifecyclePrompts(server);
 		registerInsightsTools(server);
 	}
+
+	// Auto-bootstrap Insights bridge (fire-and-forget)
+	void autoBootstrapInsights().then((result) => {
+		if (result.started) {
+			logger.info('✅ Insights bridge auto-started');
+		} else if (!result.wasRunning) {
+			logger.warn('⚠️ Insights bridge not running and auto-start failed:', result.message);
+		}
+	});
+
+	// Register session-end cleanup handlers
+	registerShutdownHandlers();
 
 	// Default: Start MCP Server
 	const transport = new StdioServerTransport();
