@@ -3,9 +3,35 @@ import { z } from 'zod';
 import { getApiClientAsync } from '@lib/api.js';
 import { getBridgeClient, formatBridgeError, isBridgeReachable } from '@lib/bridge-client.js';
 import { throwAsMcpError } from '@lib/mcp-error.js';
+import { loadConfigAsync } from '@lib/config.js';
 
 function formatJson(data: Record<string, unknown>): string {
 	return JSON.stringify(data, null, 2);
+}
+
+/**
+ * Resolve project identifier to full UUID.
+ * If input matches current project slug or is empty, use config's currentProjectId.
+ * Otherwise, return input as-is (assumed to be a full UUID).
+ */
+async function resolveProjectId(projectInput: string): Promise<string> {
+	// If empty or matches current project name (slug), use config's currentProjectId
+	if (!projectInput) {
+		const config = await loadConfigAsync();
+		return config.currentProjectId || projectInput;
+	}
+
+	const config = await loadConfigAsync();
+	const currentSlug = config.currentProjectName?.toLowerCase().replace(/[^a-z0-9]/g, '');
+	const inputSlug = projectInput.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+	// If input matches current project slug, use currentProjectId
+	if (currentSlug && inputSlug === currentSlug) {
+		return config.currentProjectId || projectInput;
+	}
+
+	// Otherwise return input as-is (could be a full UUID or different project)
+	return projectInput;
 }
 
 export function registerInsightsTools(server: McpServer): void {
@@ -144,8 +170,9 @@ export function registerInsightsTools(server: McpServer): void {
 		},
 		async (input) => {
 			try {
+				const projectId = await resolveProjectId(input.project);
 				const api = await getApiClientAsync();
-				const { data } = await api.get(`/insights/${input.project}/items`);
+				const { data } = await api.get(`/insights/${projectId}/items`);
 				return { content: [{ type: 'text' as const, text: formatJson(data as Record<string, unknown>) }] };
 			} catch (err: unknown) {
 				throwAsMcpError(err, { toolName: 'insights_get_context' });
@@ -164,8 +191,9 @@ export function registerInsightsTools(server: McpServer): void {
 		},
 		async (input) => {
 			try {
+				const projectId = await resolveProjectId(input.project);
 				const api = await getApiClientAsync();
-				const { data } = await api.get(`/insights/${input.project}/search`, {
+				const { data } = await api.get(`/insights/${projectId}/search`, {
 					params: { q: input.query, limit: input.limit ?? 20 }
 				});
 				return { content: [{ type: 'text' as const, text: formatJson(data as Record<string, unknown>) }] };
@@ -196,8 +224,9 @@ export function registerInsightsTools(server: McpServer): void {
 				}
 
 				// Fallback to backend direct delete
+				const projectId = await resolveProjectId(input.project);
 				const api = await getApiClientAsync();
-				const { data } = await api.delete(`/insights/${input.project}/items/${input.providerItemId}`, {
+				const { data } = await api.delete(`/insights/${projectId}/items/${input.providerItemId}`, {
 					data: {
 						entityType: 'observation',
 						entityId: input.providerItemId,
@@ -228,8 +257,9 @@ export function registerInsightsTools(server: McpServer): void {
 				}
 
 				// Fallback to backend
+				const projectId = await resolveProjectId(input.project);
 				const api = await getApiClientAsync();
-				const { data } = await api.get(`/insights/${input.project}/sync/status`);
+				const { data } = await api.get(`/insights/${projectId}/sync/status`);
 				return { content: [{ type: 'text' as const, text: formatJson(data as Record<string, unknown>) }] };
 			} catch (err: unknown) {
 				throwAsMcpError(err, { toolName: 'insights_sync_status' });
